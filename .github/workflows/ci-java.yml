@@ -37,10 +37,12 @@ jobs:
           filters: |
             company-observability-starter:
               - 'company-observability-starter/**'
-            # TODO: user-service:
-            #   - 'user-service/**'
-            # TODO: notification-service:
-            #   - 'notification-service/**'
+            user-service:
+              - 'user-service/**'
+            notification-service:
+              - 'notification-service/**'
+            security-lib:
+              - 'security-lib/**'
 
   # ── Build & Test ──────────────────────────────────────────────────────────
   build-and-test:
