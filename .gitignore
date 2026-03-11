@@ -1,0 +1,56 @@
+# Gradle
+/.gradle/
+/gradle/
+/gradlew
+/gradlew.bat
+build/
+out/
+
+# IDE - IntelliJ IDEA
+/.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE - VS Code
+.vscode/
+
+# IDE - Eclipse
+.classpath
+.project
+.settings/
+
+# Compiled output
+*.class
+*.jar
+*.war
+*.ear
+*.aar
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment / secrets
+.env
+*.env
+application-local.properties
+application-local.yml
+application-local.yaml
+
+# Test reports & coverage
+test-results/
+reports/
+.jacoco/
+*.exec
+
+# Temp files
+*.tmp
+*.bak
+*.swp
+*~
