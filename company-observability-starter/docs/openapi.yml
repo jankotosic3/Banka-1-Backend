@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Company Observability Starter
+  description: Logging and observability library for Spring Boot services.
+  version: "0.0.1"
+paths: {}

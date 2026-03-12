@@ -1,0 +1,189 @@
+#!/bin/sh
+set -e
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+echo "========================================="
+echo " Pre-push checks starting..."
+echo "========================================="
+
+# ── HELPERS ──────────────────────────────────
+
+# Returns 0 if the directory contains a recognizable service build system
+is_service_dir() {
+  SERVICE_DIR="$1"
+  HAS_DOTNET=0
+  { ls "$SERVICE_DIR"/*.sln >/dev/null 2>&1 || ls "$SERVICE_DIR"/*.csproj >/dev/null 2>&1; } && HAS_DOTNET=1
+
+  [ -f "$SERVICE_DIR/build.gradle" ] || [ -f "$SERVICE_DIR/gradlew" ] || \
+  [ -f "$SERVICE_DIR/pom.xml" ] || [ -f "$SERVICE_DIR/package.json" ] || \
+  [ -f "$SERVICE_DIR/go.mod" ] || [ -f "$SERVICE_DIR/requirements.txt" ] || \
+  [ -f "$SERVICE_DIR/pyproject.toml" ] || [ "$HAS_DOTNET" -eq 1 ]
+}
+
+run_tests_for_service() {
+  SERVICE_DIR="$1"
+  SERVICE_NAME=$(basename "$SERVICE_DIR")
+  echo "  -> Testing: $SERVICE_NAME"
+
+  if [ -f "$SERVICE_DIR/gradlew" ]; then
+    (cd "$SERVICE_DIR" && ./gradlew test -q --warning-mode none --console plain) || return 1
+  elif [ -f "$SERVICE_DIR/pom.xml" ]; then
+    (cd "$SERVICE_DIR" && ./mvnw verify -q) || return 1
+  elif [ -f "$SERVICE_DIR/package.json" ]; then
+    (cd "$SERVICE_DIR" && npm ci --silent && npm test) || return 1
+  elif [ -f "$SERVICE_DIR/go.mod" ]; then
+    (cd "$SERVICE_DIR" && go test ./...) || return 1
+  elif [ -f "$SERVICE_DIR/requirements.txt" ] || [ -f "$SERVICE_DIR/pyproject.toml" ]; then
+    (cd "$SERVICE_DIR" && python -m pytest -q) || return 1
+  elif ls "$SERVICE_DIR"/*.sln >/dev/null 2>&1 || ls "$SERVICE_DIR"/*.csproj >/dev/null 2>&1; then
+    (cd "$SERVICE_DIR" && dotnet test --nologo -q) || return 1
+  fi
+}
+
+validate_readme_for_service() {
+  SERVICE_DIR="$1"
+  SERVICE_NAME=$(basename "$SERVICE_DIR")
+  README="$SERVICE_DIR/README.md"
+  FAILED=0
+
+  if [ -f "$SERVICE_DIR/.skip-docs" ]; then
+    echo "  -> Docs skipped: $SERVICE_NAME (.skip-docs)"
+    return 0
+  fi
+
+  if [ ! -f "$README" ]; then
+    echo "  [FAIL] $SERVICE_NAME: README.md is missing."
+    echo "         Every service must have a README.md with:"
+    echo "           - Docker Compose usage instructions"
+    echo "           - .env configuration"
+    echo "           - Endpoint and/or event examples"
+    return 1
+  fi
+
+  # Check for required sections (case-insensitive)
+  grep -qi "docker.compose\|docker compose" "$README" || {
+    echo "  [FAIL] $SERVICE_NAME/README.md: missing Docker Compose instructions."
+    FAILED=1
+  }
+  grep -qi "\.env\|environment variable" "$README" || {
+    echo "  [FAIL] $SERVICE_NAME/README.md: missing .env / environment variable documentation."
+    FAILED=1
+  }
+  grep -qi "endpoint\|event\|api" "$README" || {
+    echo "  [FAIL] $SERVICE_NAME/README.md: missing endpoint or event examples."
+    FAILED=1
+  }
+
+  return $FAILED
+}
+
+validate_openapi_for_service() {
+  SERVICE_DIR="$1"
+  SERVICE_NAME=$(basename "$SERVICE_DIR")
+
+  if [ -f "$SERVICE_DIR/.skip-openapi" ]; then
+    echo "  -> OpenAPI skipped: $SERVICE_NAME (.skip-openapi)"
+    return 0
+  fi
+
+  SPEC_FOUND=0
+  for SPEC in \
+    "$SERVICE_DIR/docs/openapi.yml" \
+    "$SERVICE_DIR/docs/openapi.yaml" \
+    "$SERVICE_DIR/src/main/resources/openapi.yml" \
+    "$SERVICE_DIR/src/main/resources/openapi.yaml"; do
+
+    [ -f "$SPEC" ] || continue
+
+    if [ ! -s "$SPEC" ]; then
+      echo "  [WARN] OpenAPI spec is empty, skipping: $SPEC"
+      continue
+    fi
+
+    SPEC_FOUND=1
+    echo "  -> Validating OpenAPI: $SPEC"
+    redocly lint "$SPEC" || { echo "  [FAIL] OpenAPI validation failed: $SPEC"; return 1; }
+  done
+
+  if [ "$SPEC_FOUND" -eq 0 ]; then
+    echo "  [FAIL] $SERVICE_NAME: no OpenAPI spec found."
+    echo "         Add one at docs/openapi.yml or src/main/resources/openapi.yml"
+    echo "         If this service has no HTTP API, add a .skip-openapi file."
+    return 1
+  fi
+}
+
+# ── 1. TESTS ─────────────────────────────────
+echo ""
+echo "[1/3] Running unit and integration tests..."
+
+# Root-level Gradle multi-project (covers all subprojects in settings.gradle)
+if [ -f "$REPO_ROOT/gradlew" ] && [ -f "$REPO_ROOT/settings.gradle" ]; then
+  (cd "$REPO_ROOT" && ./gradlew test -q --warning-mode none --console plain) \
+    || { echo ""; echo "[FAIL] Tests failed. Push aborted."; exit 1; }
+fi
+
+# Per-service directories that are NOT Gradle subprojects (Node, Python, Go, Maven, .NET)
+if [ -f "$REPO_ROOT/settings.gradle" ]; then
+  GRADLE_SUBPROJECTS=$(grep "^include" "$REPO_ROOT/settings.gradle" | sed "s/include '//g;s/'//g;s/ //g" | tr '\n' ' ')
+else
+  GRADLE_SUBPROJECTS=""
+fi
+
+for SERVICE_DIR in "$REPO_ROOT"/*/; do
+  SERVICE_NAME=$(basename "$SERVICE_DIR")
+  echo "$GRADLE_SUBPROJECTS" | grep -qw "$SERVICE_NAME" && continue
+  is_service_dir "$SERVICE_DIR" || continue
+
+  run_tests_for_service "$SERVICE_DIR" \
+    || { echo ""; echo "[FAIL] Tests failed in $SERVICE_NAME. Push aborted."; exit 1; }
+done
+
+echo "[1/3] Tests passed."
+
+# ── 2. DOCUMENTATION ──────────────────────────
+echo ""
+echo "[2/3] Validating documentation..."
+DOC_FAILED=0
+
+for SERVICE_DIR in "$REPO_ROOT"/*/; do
+  is_service_dir "$SERVICE_DIR" || continue
+
+  validate_readme_for_service "$SERVICE_DIR"  || DOC_FAILED=1
+
+  if command -v redocly >/dev/null 2>&1; then
+    validate_openapi_for_service "$SERVICE_DIR" || DOC_FAILED=1
+  else
+    echo "  [WARN] redocly not found, skipping OpenAPI validation."
+    echo "         Install with: npm install -g @redocly/cli"
+  fi
+done
+
+if [ "$DOC_FAILED" -ne 0 ]; then
+  echo ""
+  echo "[FAIL] Documentation validation failed. Push aborted."
+  exit 1
+fi
+
+echo "[2/3] Documentation validated."
+
+# ── 3. DOCKER BUILD ───────────────────────────
+echo ""
+echo "[3/3] Validating Docker build..."
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "  [WARN] Docker not found, skipping Docker build validation."
+elif [ ! -f "$REPO_ROOT/setup/docker-compose.yml" ] && [ ! -f "$REPO_ROOT/setup/docker-compose.yaml" ]; then
+  echo "  [WARN] No docker-compose.yml found at setup/, skipping."
+else
+  (cd "$REPO_ROOT/setup" && docker compose build --no-cache) \
+    || { echo ""; echo "[FAIL] Docker build failed. Push aborted."; exit 1; }
+  echo "[3/3] Docker build passed."
+fi
+
+echo ""
+echo "========================================="
+echo " All checks passed. Pushing..."
+echo "========================================="

@@ -1,0 +1,247 @@
+name: CI - Java Services
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'company-observability-starter/**'
+      - 'user-service/**'
+      - 'security-lib/**'
+      - 'notification-service/**'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'company-observability-starter/**'
+      - 'user-service/**'
+      - 'notification-service/**'
+      - 'security-lib/**'
+
+jobs:
+
+  # ── Detect which services changed ────────────────────────────────────────
+  detect-changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Filter changed paths
+        uses: dorny/paths-filter@v3.0.2
+        id: filter
+        with:
+          filters: |
+            company-observability-starter:
+              - 'company-observability-starter/**'
+            user-service:
+              - 'user-service/**'
+            notification-service:
+              - 'notification-service/**'
+            security-lib:
+              - 'security-lib/**'
+
+  # ── Build & Test ──────────────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test (${{ matrix.service }})
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.services != '[]' && needs.detect-changes.outputs.services != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4.7.0
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version=8.14
+
+      - name: Build
+        run: ./gradlew :${{ matrix.service }}:build -x test --no-daemon --warning-mode none --console plain
+
+      - name: Test
+        run: ./gradlew :${{ matrix.service }}:test --no-daemon --warning-mode none --console plain
+
+      - name: Publish test report
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: '${{ matrix.service }}/build/test-results/test/TEST-*.xml'
+          check_name: 'Test Report - ${{ matrix.service }}'
+
+      - name: Upload test artifacts on failure
+        uses: actions/upload-artifact@v4.6.2
+        if: failure()
+        with:
+          name: test-results-${{ matrix.service }}-${{ github.run_id }}
+          path: ${{ matrix.service }}/build/reports/tests/
+          retention-days: 7
+
+  # ── Validate Documentation ────────────────────────────────────────────────
+  validate-docs:
+    name: Validate Docs (${{ matrix.service }})
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.services != '[]' && needs.detect-changes.outputs.services != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Check for .skip-docs
+        id: skip-docs
+        run: |
+          if [ -f "${{ matrix.service }}/.skip-docs" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⏭️  ${{ matrix.service }}: documentation validation skipped (.skip-docs)"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check README.md exists
+        if: steps.skip-docs.outputs.skip != 'true'
+        run: |
+          if [ ! -f "${{ matrix.service }}/README.md" ]; then
+            echo "❌ ${{ matrix.service }}/README.md is missing."
+            echo "   Every service must have a README.md with:"
+            echo "   - Docker Compose usage instructions"
+            echo "   - .env / environment variable documentation"
+            echo "   - Endpoint and/or event examples"
+            exit 1
+          fi
+
+      - name: Check README.md required sections
+        if: steps.skip-docs.outputs.skip != 'true'
+        run: |
+          README="${{ matrix.service }}/README.md"
+          FAILED=0
+
+          grep -qi "docker.compose\|docker compose" "$README" || {
+            echo "❌ ${{ matrix.service }}/README.md: missing Docker Compose instructions."
+            FAILED=1
+          }
+          grep -qi "\.env\|environment variable" "$README" || {
+            echo "❌ ${{ matrix.service }}/README.md: missing .env / environment variable documentation."
+            FAILED=1
+          }
+          grep -qi "endpoint\|event\|api" "$README" || {
+            echo "❌ ${{ matrix.service }}/README.md: missing endpoint or event examples."
+            FAILED=1
+          }
+
+          [ "$FAILED" -eq 0 ] && echo "✅ ${{ matrix.service }}/README.md contains all required sections."
+          exit $FAILED
+
+      - name: Set up Node.js for redocly
+        if: steps.skip-docs.outputs.skip != 'true'
+        uses: actions/setup-node@v4.3.0
+        with:
+          node-version: '24'
+
+      - name: Install redocly
+        if: steps.skip-docs.outputs.skip != 'true'
+        run: npm install -g @redocly/cli
+
+      - name: Check OpenAPI spec exists or is skipped
+        if: steps.skip-docs.outputs.skip != 'true'
+        id: openapi-check
+        run: |
+          SERVICE="${{ matrix.service }}"
+
+          if [ -f "$SERVICE/.skip-openapi" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "⏭️  $SERVICE: OpenAPI validation skipped (.skip-openapi)"
+            exit 0
+          fi
+
+          SPEC=""
+          for PATH_CANDIDATE in \
+            "$SERVICE/docs/openapi.yml" \
+            "$SERVICE/docs/openapi.yaml" \
+            "$SERVICE/src/main/resources/openapi.yml" \
+            "$SERVICE/src/main/resources/openapi.yaml"; do
+            if [ -f "$PATH_CANDIDATE" ] && [ -s "$PATH_CANDIDATE" ]; then
+              SPEC="$PATH_CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$SPEC" ]; then
+            echo "❌ $SERVICE: no OpenAPI spec found."
+            echo "   Add one at docs/openapi.yml or src/main/resources/openapi.yml"
+            echo "   If this service has no HTTP API, add a .skip-openapi file."
+            exit 1
+          fi
+
+          echo "spec=$SPEC" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Validate OpenAPI spec
+        if: steps.skip-docs.outputs.skip != 'true' && steps.openapi-check.outputs.skip != 'true'
+        run: |
+          redocly lint "${{ steps.openapi-check.outputs.spec }}"
+          echo "✅ OpenAPI spec is valid."
+
+  # ── Docker Build Validation ───────────────────────────────────────────────
+  docker-validate:
+    name: Docker Validate (${{ matrix.service }})
+    needs: [detect-changes, build-and-test, validate-docs]
+    if: ${{ needs.detect-changes.outputs.services != '[]' && needs.detect-changes.outputs.services != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version=8.14
+
+      - name: Check for Dockerfile
+        id: check
+        run: |
+          if [ -f "${{ matrix.service }}/Dockerfile" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No Dockerfile found in ${{ matrix.service }}, skipping Docker validation."
+          fi
+
+      - name: Validate Docker build
+        if: steps.check.outputs.exists == 'true'
+        # Build from repo root and point to the Dockerfile inside the service folder
+        run: docker build -f ${{ matrix.service }}/Dockerfile .
+        
+  # ── TODO: Docker Build & Push to Registry ────────────────────────────────
+  # Configure once a container registry is available.
+
+
+
+  # ── TODO: Deploy to Dev Environment ──────────────────────────────────────
+  #  Configure once the dev server and docker-compose are set up.

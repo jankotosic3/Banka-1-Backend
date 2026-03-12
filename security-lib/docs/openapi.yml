@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Security Library API
+  description: API documentation for the Security Library
+  version: "0.0.1"
+paths: {}

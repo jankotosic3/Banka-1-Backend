@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.gradle
+.gradle-home
+build
+out
+*.iml
+.idea
+.vscode
+docs
+HELP.md
+*.log
+tmp
+temp

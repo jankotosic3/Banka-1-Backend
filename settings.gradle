@@ -1,3 +1,8 @@
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'
+}
+
 rootProject.name = 'Banka-1-Backend'
 
 include 'company-observability-starter'
+include 'notification-service'
