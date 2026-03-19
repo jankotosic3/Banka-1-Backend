@@ -30,7 +30,13 @@ public enum ErrorCode {
     INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "ERR_AUTH_001", "Neispravan token"),
 
     /** Pogresni kredencijali pri logovanju. */
-    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "ERR_AUTH_002", "Pogrešan email ili lozinka");
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "ERR_AUTH_002", "Pogrešan email ili lozinka"),
+
+    /** Klijent nije aktivirao nalog. */
+    USER_INACTIVE(HttpStatus.FORBIDDEN, "ERR_AUTH_003", "Klijent nije aktivan"),
+
+    /** Klijent sa zadatim emailom nije pronadjen (koristi se u forgot-password). */
+    USER_NOT_FOUND(HttpStatus.NOT_FOUND, "ERR_AUTH_004", "Korisnik nije pronađen");
 
     /** HTTP status koji se vraca klijentu kada se baci ova greska. */
     private final HttpStatus httpStatus;

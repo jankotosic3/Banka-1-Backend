@@ -32,6 +32,15 @@ public final class DefaultNotificationTemplateFactory implements NotificationTem
                     "Account Deactivation Email",
                     "Zdravo {{name}}, vas nalog je deaktiviran."
             );
+            case CLIENT_CREATED -> new EmailTemplate(
+                    "Aktivacija naloga",
+                    "Zdravo {{name}}, vas klijentski nalog je kreiran. "
+                            + "Aktivirajte nalog klikom na link:\n{{activationLink}}"
+            );
+            case CLIENT_PASSWORD_RESET -> new EmailTemplate(
+                    "Reset lozinke",
+                    "Zdravo {{name}}, resetujte lozinku klikom na link:\n{{resetLink}}"
+            );
             case UNKNOWN -> throw new IllegalArgumentException(
                     "No template is defined for notification type: " + type
             );

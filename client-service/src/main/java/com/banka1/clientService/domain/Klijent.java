@@ -116,6 +116,18 @@ public class Klijent extends BaseEntity {
     private String password;
 
     /**
+     * Indikator da li je nalog klijenta aktivan (aktiviran putem email linka).
+     */
+    @Column(nullable = false)
+    private boolean aktivan = false;
+
+    /**
+     * Aktivacioni / reset token vezan za klijenta (opcioni).
+     */
+    @OneToOne(mappedBy = "klijent", cascade = CascadeType.ALL, orphanRemoval = true)
+    private ClientConfirmationToken confirmationToken;
+
+    /**
      * Jedinstveni maticni broj gradjana klijenta – ne moze se menjati nakon kreiranja.
      */
     @NotBlank

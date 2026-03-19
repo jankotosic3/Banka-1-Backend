@@ -1,5 +1,6 @@
 package com.banka1.clientService.service.implementation;
 
+import com.banka1.clientService.domain.ClientConfirmationToken;
 import com.banka1.clientService.domain.Klijent;
 import com.banka1.clientService.dto.rabbitmq.EmailDto;
 import com.banka1.clientService.dto.rabbitmq.EmailType;
@@ -11,8 +12,10 @@ import com.banka1.clientService.exception.BusinessException;
 import com.banka1.clientService.exception.ErrorCode;
 import com.banka1.clientService.mappers.ClientMapper;
 import com.banka1.clientService.rabbitMQ.RabbitClient;
+import com.banka1.clientService.repository.ClientConfirmationTokenRepository;
 import com.banka1.clientService.repository.KlijentRepository;
 import com.banka1.clientService.service.ClientService;
+import com.banka1.clientService.service.TokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -31,20 +34,14 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Transactional
 public class ClientServiceImplementation implements ClientService {
 
-    /**
-     * Repozitorijum za pristup entitetima klijenata.
-     */
     private final KlijentRepository klijentRepository;
-
-    /**
-     * Mapper za konverziju izmedju DTO i JPA entiteta klijenta.
-     */
     private final ClientMapper clientMapper;
-
-    /**
-     * Klijent za slanje email notifikacija putem RabbitMQ-a.
-     */
     private final RabbitClient rabbitClient;
+    private final ClientConfirmationTokenRepository confirmationTokenRepository;
+    private final TokenService tokenService;
+
+    @org.springframework.beans.factory.annotation.Value("${url.activate-account}")
+    private String urlActivateAccount;
 
     /**
      * Kreira novog klijenta i salje notifikacioni mejl nakon uspesnog commita transakcije.
@@ -57,10 +54,17 @@ public class ClientServiceImplementation implements ClientService {
         Klijent klijent = clientMapper.toEntity(dto);
         Klijent saved = klijentRepository.save(klijent);
 
+        String generated = tokenService.generateRandomToken();
+        ClientConfirmationToken confirmationToken = new ClientConfirmationToken(
+                tokenService.sha256Hex(generated), saved);
+        confirmationTokenRepository.save(confirmationToken);
+        saved.setConfirmationToken(confirmationToken);
+
         EmailDto emailDto = new EmailDto(
                 saved.getIme(),
                 saved.getEmail(),
-                EmailType.CLIENT_CREATED);
+                EmailType.CLIENT_CREATED,
+                urlActivateAccount + generated);
 
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override

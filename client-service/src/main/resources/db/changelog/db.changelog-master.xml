@@ -9,5 +9,6 @@
     <include file="db/changelog/002-add-client-role.sql"/>
     <include file="db/changelog/003-drop-salt-password.sql"/>
     <include file="db/changelog/004-seed-data.sql"/>
+    <include file="db/changelog/005-activation.sql"/>
 
 </databaseChangeLog>

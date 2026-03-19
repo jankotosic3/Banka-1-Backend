@@ -428,6 +428,10 @@ public class NotificationDeliveryService {
                     Optional.of(NotificationType.EMPLOYEE_PASSWORD_RESET);
             case NotificationType.ROUTING_KEY_EMPLOYEE_ACCOUNT_DEACTIVATED ->
                     Optional.of(NotificationType.EMPLOYEE_ACCOUNT_DEACTIVATED);
+            case NotificationType.ROUTING_KEY_CLIENT_CREATED ->
+                    Optional.of(NotificationType.CLIENT_CREATED);
+            case NotificationType.ROUTING_KEY_CLIENT_PASSWORD_RESET ->
+                    Optional.of(NotificationType.CLIENT_PASSWORD_RESET);
             default -> Optional.empty();
         };
     }

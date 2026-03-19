@@ -78,6 +78,23 @@ public class RabbitConfig {
     }
 
     /**
+     * Binds the notification queue to the exchange for client events ({@code client.#}).
+     *
+     * @param notificationServiceQueue queue bean
+     * @param employeeEventsExchange   exchange bean
+     * @return exchange-to-queue binding for client routing keys
+     */
+    @Bean
+    public Binding clientNotificationBinding(
+            Queue notificationServiceQueue,
+            TopicExchange employeeEventsExchange
+    ) {
+        return BindingBuilder.bind(notificationServiceQueue)
+                .to(employeeEventsExchange)
+                .with("client.#");
+    }
+
+    /**
      * Converts RabbitMQ JSON payloads ==> to/from ==> Java objects.
      *
      * @return Jackson-based message converter
