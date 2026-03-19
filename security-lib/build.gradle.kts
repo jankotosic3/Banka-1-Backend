@@ -42,6 +42,7 @@ dependencies {
 	api(platform("org.springframework.boot:spring-boot-dependencies:3.4.3"))
 	api("org.springframework.boot:spring-boot-starter-security")
 	implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
+	implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 	annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:3.4.3")
 //	implementation("org.springframework.boot:spring-boot-starter-webmvc")
 	testImplementation("org.springframework.security:spring-security-test")
@@ -63,5 +64,6 @@ tasks.withType<org.gradle.api.plugins.quality.Checkstyle>().configureEach {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+	classpath += sourceSets.main.get().output
 }
 

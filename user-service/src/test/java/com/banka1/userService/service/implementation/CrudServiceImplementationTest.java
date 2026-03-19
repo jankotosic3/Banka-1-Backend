@@ -288,7 +288,7 @@ class CrudServiceImplementationTest {
     @Test
     void deleteEmployeeSoftDeletesAndRegistersEmailCallback() {
         Zaposlen emp = employee("ana@banka.com", "ana", Role.BASIC);
-        Jwt jwt = mock(Jwt.class);
+        Jwt jwt = jwtWithClaims(Map.of("roles", "ADMIN"));
 
         when(zaposlenRepository.findById(1L)).thenReturn(Optional.of(emp));
 

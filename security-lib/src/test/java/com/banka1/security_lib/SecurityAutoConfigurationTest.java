@@ -1,31 +1,25 @@
 package com.banka1.security_lib;
 
-import com.banka1.security_lib.SecurityConfig;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
-import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class SecurityAutoConfigurationTest {
+class SecurityAutoConfigurationTest {
 
-    private final WebApplicationContextRunner contextRunner =
-            new WebApplicationContextRunner()
-                    .withConfiguration(
-                            AutoConfigurations.of(
-                                    SecurityAutoConfiguration.class,
-                                    SecurityConfig.class
-                            )
-                    )
-                    .withBean(JwtDecoder.class, () -> token -> null);
+    private final SecurityConfig securityConfig = new SecurityConfig();
 
     @Test
-    void securityConfigurationLoads() {
-        contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(SecurityFilterChain.class);
-        });
+    void corsConfigurationAllowsFrontendOrigin() {
+        CorsConfigurationSource source = securityConfig.corsConfigurationSource();
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/test");
+        var configuration = source.getCorsConfiguration(request);
+
+        assertThat(configuration).isNotNull();
+        assertThat(configuration.getAllowedOrigins()).containsExactly("http://localhost:4200");
+        assertThat(configuration.getAllowedMethods()).containsExactly("*");
+        assertThat(configuration.getAllowedHeaders()).containsExactly("*");
+        assertThat(configuration.getAllowCredentials()).isTrue();
     }
 }

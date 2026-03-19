@@ -2,7 +2,6 @@ package com.banka1.account_service.domain;
 
 import com.banka1.account_service.domain.enums.AccountOwnershipType;
 import com.banka1.account_service.domain.enums.Status;
-import com.banka1.account_service.domain.enums.CurrencyCode;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -43,7 +42,7 @@ public abstract class Account extends BaseEntity{
     @Column(nullable = false,updatable = false)
     private LocalDateTime datumIVremeKreiranja;
     private LocalDate datumIsteka;
-    @ManyToOne(optional = false, fetch = FetchType.EAGER)
+    @ManyToOne(optional = false, fetch = FetchType.LAZY)
     @JoinColumn(name = "currency_id", nullable = false)
     private Currency currency;
     @Column(nullable = false)
@@ -60,6 +59,21 @@ public abstract class Account extends BaseEntity{
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id")
     private Company company;
+
+
+    protected void validacija(AccountOwnershipType ownershipType) {
+        if (ownershipType == null) {
+            throw new IllegalStateException("Ownership type is required");
+        }
+
+        if (ownershipType == AccountOwnershipType.BUSINESS && this.getCompany() == null) {
+            throw new IllegalStateException("Company is required for BUSINESS account");
+        }
+
+        if (ownershipType == AccountOwnershipType.PERSONAL && this.getCompany() != null) {
+            throw new IllegalStateException("Company must be null for PERSONAL account");
+        }
+    }
 
 
 }

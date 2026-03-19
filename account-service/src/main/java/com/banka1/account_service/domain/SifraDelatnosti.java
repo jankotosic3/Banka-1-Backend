@@ -20,7 +20,10 @@ public class SifraDelatnosti extends BaseEntity{
     @Column(nullable = false,updatable = false)
     private String oznaka;
     @ElementCollection
-    @CollectionTable(name = "currency_countries", joinColumns = @JoinColumn(name = "currency_id"))
+    @CollectionTable(
+            name = "sifra_delatnosti_sektori",
+            joinColumns = @JoinColumn(name = "sifra_delatnosti_id")
+    )
     @Column(name = "country", nullable = false)
     private Set<String> sektori = new HashSet<>();
     @Column(nullable = false,updatable = false)
