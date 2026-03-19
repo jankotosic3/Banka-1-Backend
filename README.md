@@ -280,3 +280,33 @@ spring:
 
 See `company-observability-starter/README.md` for full configuration options.
 
+### 9. Register with the API Gateway (Crucial for ecosystem integration)
+
+For your service to be reachable by frontends or outside traffic within the full ecosystem, it must be registered with NGINX. 
+
+1. **Define the internal port:** Add it to the root `.env` file (e.g., `NEW_SERVICE_PORT=8085`).
+2. **Add to `setup/docker-compose.yml`:** Use `expose` to keep the port hidden from the public, but accessible to the Gateway:
+   ```yaml
+     your-new-service:
+       build: ...
+       env_file:
+         - .env
+       expose:
+         - "${NEW_SERVICE_PORT:-8085}"
+       networks:
+         - banka-network
+   ```
+3. **Map the route in `api-gateway/default.conf.template`:** NGINX will dynamically read the `.env` variable on startup and route the traffic.
+   ```nginx
+   upstream new_service {
+       server your-new-service:${NEW_SERVICE_PORT};
+   }
+
+   server {
+       # ...
+       location /new-service-path {
+           proxy_pass http://new_service;
+       }
+   }
+   ```
+

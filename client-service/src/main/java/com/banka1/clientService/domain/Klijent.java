@@ -1,5 +1,6 @@
 package com.banka1.clientService.domain;
 
+import com.banka1.clientService.domain.enums.ClientRole;
 import com.banka1.clientService.domain.enums.Pol;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
@@ -82,7 +83,7 @@ public class Klijent extends BaseEntity {
 
     public void setBrojTelefona(String brojTelefona) {
         if (brojTelefona == null || brojTelefona.isBlank()) {
-            this.brojTelefona = brojTelefona;
+            this.brojTelefona = null;
             return;
         }
         String t = brojTelefona.strip();
@@ -103,15 +104,16 @@ public class Klijent extends BaseEntity {
     private String adresa;
 
     /**
+     * Uloga klijenta u sistemu.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ClientRole role = ClientRole.CLIENT_BASIC;
+
+    /**
      * Hesh lozinke klijenta (Argon2 ili slicno).
      */
     private String password;
-
-    /**
-     * Salt koji se koristi pri hesiranju lozinke.
-     */
-    @Column(name = "salt_password")
-    private String saltPassword;
 
     /**
      * Jedinstveni maticni broj gradjana klijenta – ne moze se menjati nakon kreiranja.

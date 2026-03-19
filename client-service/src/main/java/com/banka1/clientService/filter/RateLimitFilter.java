@@ -9,7 +9,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -17,14 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Stiti osetljive endpoint-e od prekomjernog koriscenja.
  * Parametri {@code maxRequests} i {@code windowMs} se injektuju iz konfiguracije
  * kako bi se mogli menjati bez ponovnog build-a.
- * Filter se primenjuje samo na putanje definisane u {@link #RATE_LIMITED_PATHS}.
+ * Filter se primenjuje samo na POST zahteve na putanjama registrovanim u {@link RateLimitConfig}.
  */
 public class RateLimitFilter extends OncePerRequestFilter {
-
-    /** Skup putanja na koje se primenjuje rate limiting. */
-    private static final Set<String> RATE_LIMITED_PATHS = Set.of(
-            "/customers"
-    );
 
     /** Maksimalni broj zahteva po IP adresi unutar vremenskog prozora. */
     private final int maxRequests;
@@ -44,9 +38,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     /**
-     * Proverava rate limit za svaki dolazeci POST zahtev na zasticenim putanjama.
-     * Zahtevi na putanjama koje nisu u {@link #RATE_LIMITED_PATHS} ili koji nisu POST
-     * se propustaju bez provere. Prekoracenje limita rezultuje HTTP statusom 429.
+     * Proverava rate limit za svaki dolazeci POST zahtev.
+     * Zahtevi koji nisu POST se propustaju bez provere. Prekoracenje limita rezultuje HTTP statusom 429.
      *
      * @param request     dolazeci HTTP zahtev
      * @param response    HTTP odgovor
@@ -58,8 +51,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
 
-        String path = request.getServletPath();
-        if (!RATE_LIMITED_PATHS.contains(path) || !"POST".equalsIgnoreCase(request.getMethod())) {
+        if (!"POST".equalsIgnoreCase(request.getMethod())) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -80,6 +72,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
             timestamps.addLast(now);
         }
 
+        // Remove entries whose deques are empty (all timestamps expired) to prevent memory leak
+        requestMap.entrySet().removeIf(entry -> {
+            synchronized (entry.getValue()) {
+                return entry.getValue().isEmpty();
+            }
+        });
+
         filterChain.doFilter(request, response);
     }
 
@@ -93,7 +92,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private String getClientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
+            String[] parts = forwarded.split(",");
+            return parts[parts.length - 1].trim();
         }
         return request.getRemoteAddr();
     }

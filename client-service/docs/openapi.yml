@@ -8,6 +8,39 @@ servers:
 security:
 - BearerAuthentication: []
 paths:
+  /auth/login:
+    post:
+      tags:
+      - auth-controller
+      summary: Prijava klijenta
+      description: Autentifikuje klijenta i vraca JWT token. Ne zahteva prethodni token.
+      operationId: login
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequestDto"
+        required: true
+      responses:
+        "200":
+          description: Uspesna prijava
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/LoginResponseDto"
+        "400":
+          description: Neispravni podaci u zahtevu
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponseDto"
+        "401":
+          description: Pogresan email ili lozinka
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ErrorResponseDto"
   /customers/{id}:
     put:
       tags:
@@ -264,6 +297,11 @@ components:
           type: string
         adresa:
           type: string
+        role:
+          type: string
+          enum:
+          - CLIENT_BASIC
+          - CLIENT_TRADING
     ClientCreateRequestDto:
       type: object
       properties:
@@ -374,6 +412,22 @@ components:
           type: boolean
         unsorted:
           type: boolean
+    LoginRequestDto:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+      - email
+      - password
+    LoginResponseDto:
+      type: object
+      properties:
+        token:
+          type: string
     ClientIdResponseDto:
       type: object
       properties:

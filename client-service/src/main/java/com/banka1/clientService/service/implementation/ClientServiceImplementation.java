@@ -5,7 +5,7 @@ import com.banka1.clientService.dto.rabbitmq.EmailDto;
 import com.banka1.clientService.dto.rabbitmq.EmailType;
 import com.banka1.clientService.dto.requests.ClientCreateRequestDto;
 import com.banka1.clientService.dto.requests.ClientUpdateRequestDto;
-import com.banka1.clientService.dto.responses.ClientIdResponseDto;
+import com.banka1.clientService.dto.responses.ClientInfoResponseDto;
 import com.banka1.clientService.dto.responses.ClientResponseDto;
 import com.banka1.clientService.exception.BusinessException;
 import com.banka1.clientService.exception.ErrorCode;
@@ -14,7 +14,6 @@ import com.banka1.clientService.rabbitMQ.RabbitClient;
 import com.banka1.clientService.repository.KlijentRepository;
 import com.banka1.clientService.service.ClientService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -27,7 +26,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * Sve pretrage koriste LIKE escapovanje radi zastite od SQL injection putem metakaraktera.
  * Email notifikacije se salju asinhorno putem RabbitMQ-a tek nakon uspesnog commita transakcije.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional
@@ -68,13 +66,6 @@ public class ClientServiceImplementation implements ClientService {
             @Override
             public void afterCommit() {
                 rabbitClient.sendEmailNotification(emailDto);
-            }
-
-            @Override
-            public void afterCompletion(int status) {
-                if (status == STATUS_ROLLED_BACK) {
-                    log.warn("Transakcija je ponistena — preskacemo slanje email notifikacije za klijenta: {}", emailDto.getUserEmail());
-                }
             }
         });
 
@@ -162,10 +153,25 @@ public class ClientServiceImplementation implements ClientService {
      */
     @Override
     @Transactional(readOnly = true)
-    public ClientIdResponseDto getIdByJmbg(String jmbg) {
+    public ClientInfoResponseDto getInfoByJmbg(String jmbg) {
         Klijent klijent = klijentRepository.findByJmbg(jmbg)
                 .orElseThrow(() -> new BusinessException(ErrorCode.JMBG_NOT_FOUND, "JMBG: [PROTECTED]"));
-        return new ClientIdResponseDto(klijent.getId());
+        return new ClientInfoResponseDto(klijent.getId(),klijent.getIme(),klijent.getPrezime());
+    }
+
+    /**
+     * Vraca osnovne informacije o klijentu na osnovu internog ID-a.
+     *
+     * @param id identifikator klijenta
+     * @return DTO sa ID-em, imenom i prezimenom klijenta
+     * @throws BusinessException ako klijent sa zadatim ID-em nije pronadjen
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ClientInfoResponseDto getInfoById(Long id) {
+        Klijent klijent = klijentRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CLIENT_NOT_FOUND, "ID: " + id));
+        return new ClientInfoResponseDto(klijent.getId(), klijent.getIme(), klijent.getPrezime());
     }
 
     /**

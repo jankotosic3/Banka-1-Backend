@@ -2,7 +2,7 @@ package com.banka1.clientService.controller;
 
 import com.banka1.clientService.dto.requests.ClientCreateRequestDto;
 import com.banka1.clientService.dto.requests.ClientUpdateRequestDto;
-import com.banka1.clientService.dto.responses.ClientIdResponseDto;
+import com.banka1.clientService.dto.responses.ClientInfoResponseDto;
 import com.banka1.clientService.dto.responses.ClientResponseDto;
 import com.banka1.clientService.service.ClientService;
 import jakarta.validation.Valid;
@@ -65,6 +65,7 @@ public class ClientController {
      * @return stranica klijenata koji odgovaraju filterima
      */
     @GetMapping
+    @PreAuthorize("hasRole('AGENT')")
     public ResponseEntity<Page<ClientResponseDto>> searchClients(
             @AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) String ime,
@@ -87,6 +88,7 @@ public class ClientController {
      * @return stranica rezultata globalne pretrage
      */
     @GetMapping("/search")
+    @PreAuthorize("hasRole('AGENT')")
     public ResponseEntity<Page<ClientResponseDto>> globalSearchClients(
             @AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) String query,
@@ -108,7 +110,7 @@ public class ClientController {
      * @return azurirani klijent
      */
     @PutMapping("/{id}")
-    @PreAuthorize("hasRole('BASIC')")
+    @PreAuthorize("hasRole('AGENT')")
     public ResponseEntity<ClientResponseDto> updateClient(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long id,
@@ -143,7 +145,20 @@ public class ClientController {
      */
     @GetMapping("/jmbg/{jmbg}")
     @PreAuthorize("hasRole('SERVICE')")
-    public ResponseEntity<ClientIdResponseDto> getIdByJmbg(@PathVariable String jmbg) {
-        return ResponseEntity.ok(clientService.getIdByJmbg(jmbg));
+    public ResponseEntity<ClientInfoResponseDto> getInfoByJmbg(@PathVariable String jmbg) {
+        return ResponseEntity.ok(clientService.getInfoByJmbg(jmbg));
+    }
+
+    /**
+     * Vraca osnovne informacije o klijentu na osnovu internog ID-a.
+     * Ovoj ruti moze pristupiti SAMO SERVICE token (interni pozivi izmedju servisa).
+     *
+     * @param id identifikator klijenta
+     * @return DTO sa ID-em, imenom i prezimenom klijenta
+     */
+    @GetMapping("/{id}")
+    @PreAuthorize("hasRole('SERVICE')")
+    public ResponseEntity<ClientInfoResponseDto> getInfoById(@PathVariable Long id) {
+        return ResponseEntity.ok(clientService.getInfoById(id));
     }
 }

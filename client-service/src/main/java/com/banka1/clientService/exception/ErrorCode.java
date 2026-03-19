@@ -27,7 +27,10 @@ public enum ErrorCode {
     // ── Autorizacione greske (ERR_AUTH_xxx) ─────────────────────────────────
 
     /** Nevalidan JWT token. */
-    INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "ERR_AUTH_001", "Neispravan token");
+    INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "ERR_AUTH_001", "Neispravan token"),
+
+    /** Pogresni kredencijali pri logovanju. */
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED, "ERR_AUTH_002", "Pogrešan email ili lozinka");
 
     /** HTTP status koji se vraca klijentu kada se baci ova greska. */
     private final HttpStatus httpStatus;

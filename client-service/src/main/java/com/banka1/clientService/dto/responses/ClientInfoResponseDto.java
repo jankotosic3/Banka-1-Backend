@@ -10,8 +10,9 @@ import lombok.Setter;
 @Getter
 @Setter
 @AllArgsConstructor
-public class ClientIdResponseDto {
+public class ClientInfoResponseDto {
 
     /** Identifikator klijenta. */
     private Long id;
+    private String name,lastName;
 }

@@ -1,5 +1,6 @@
 package com.banka1.clientService.dto.responses;
 
+import com.banka1.clientService.domain.enums.ClientRole;
 import com.banka1.clientService.domain.enums.Pol;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -37,4 +38,7 @@ public class ClientResponseDto {
 
     /** Adresa stanovanja klijenta. */
     private String adresa;
+
+    /** Uloga klijenta u sistemu. */
+    private ClientRole role;
 }

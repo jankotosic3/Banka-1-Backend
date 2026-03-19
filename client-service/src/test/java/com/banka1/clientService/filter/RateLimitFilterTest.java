@@ -61,19 +61,6 @@ class RateLimitFilterTest {
     }
 
     @Test
-    void postToNonRateLimitedPathBypassesFilter() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/other");
-        request.setServletPath("/other");
-        request.setRemoteAddr("10.0.0.4");
-
-        for (int i = 0; i < 20; i++) {
-            MockHttpServletResponse response = new MockHttpServletResponse();
-            filter.doFilter(request, response, new MockFilterChain());
-            assertThat(response.getStatus()).isNotEqualTo(429);
-        }
-    }
-
-    @Test
     void differentIpsHaveSeparateRateLimits() throws Exception {
         for (int i = 0; i < 10; i++) {
             MockHttpServletRequest req = new MockHttpServletRequest("POST", "/customers");
@@ -99,7 +86,7 @@ class RateLimitFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(request, response, new MockFilterChain());
 
-        // Rate limit should be hit for 203.0.113.5, not for 10.0.0.99
+        // Rate limit should be hit for 10.0.0.1 (last/rightmost IP), not for 10.0.0.99
         assertThat(response.getStatus()).isEqualTo(429);
     }
 

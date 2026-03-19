@@ -134,6 +134,45 @@ class ClientMapperTest {
         assertThat(klijent.getAdresa()).isEqualTo("Njegoseva 25");
     }
 
+    @Test
+    void toEntityWithNullDtoReturnsNull() {
+        assertThat(mapper.toEntity(null)).isNull();
+    }
+
+    @Test
+    void toDtoWithNullKlijentReturnsNull() {
+        assertThat(mapper.toDto(null)).isNull();
+    }
+
+    @Test
+    void updateEntityFromDtoWithNullDtoDoesNothing() {
+        Klijent klijent = new Klijent();
+        klijent.setIme("Petar");
+        klijent.setPrezime("Petrovic");
+
+        mapper.updateEntityFromDto(klijent, null);
+
+        assertThat(klijent.getIme()).isEqualTo("Petar");
+        assertThat(klijent.getPrezime()).isEqualTo("Petrovic");
+    }
+
+    @Test
+    void updateEntityFromDtoUpdatesEmailWhenProvided() {
+        Klijent klijent = new Klijent();
+        klijent.setIme("Petar");
+        klijent.setPrezime("Petrovic");
+        klijent.setEmail("stari@banka.com");
+
+        ClientUpdateRequestDto dto = new ClientUpdateRequestDto();
+        dto.setIme("Petar");
+        dto.setPrezime("Petrovic");
+        dto.setEmail("novi@banka.com");
+
+        mapper.updateEntityFromDto(klijent, dto);
+
+        assertThat(klijent.getEmail()).isEqualTo("novi@banka.com");
+    }
+
     // --- toString ---
 
     @Test
@@ -189,9 +228,9 @@ class ClientMapperTest {
     }
 
     @Test
-    void blankPhoneIsStoredAsBlank() {
+    void blankPhoneIsStoredAsNull() {
         Klijent k = new Klijent();
         k.setBrojTelefona("   ");
-        assertThat(k.getBrojTelefona()).isEqualTo("   ");
+        assertThat(k.getBrojTelefona()).isNull();
     }
 }

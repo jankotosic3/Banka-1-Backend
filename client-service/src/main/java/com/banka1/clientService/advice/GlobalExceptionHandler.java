@@ -3,13 +3,13 @@ package com.banka1.clientService.advice;
 import com.banka1.clientService.dto.responses.ErrorResponseDto;
 import com.banka1.clientService.exception.BusinessException;
 import com.banka1.clientService.exception.ErrorCode;
+import org.springframework.stereotype.Component;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.amqp.AmqpException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.stereotype.Component;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -66,7 +66,7 @@ public class GlobalExceptionHandler {
         ErrorResponseDto error = new ErrorResponseDto(
                 errorCode.getCode(),
                 errorCode.getTitle(),
-                errorCode.name()
+                errorCode.getTitle()
         );
         return new ResponseEntity<>(error, errorCode.getHttpStatus());
     }

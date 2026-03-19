@@ -6,5 +6,7 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.17.xsd">
 
     <include file="db/changelog/001-initial-schema.sql"/>
+    <include file="db/changelog/002-add-client-role.sql"/>
+    <include file="db/changelog/003-drop-salt-password.sql"/>
 
 </databaseChangeLog>

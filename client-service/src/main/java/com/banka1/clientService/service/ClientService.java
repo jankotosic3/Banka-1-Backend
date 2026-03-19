@@ -2,7 +2,7 @@ package com.banka1.clientService.service;
 
 import com.banka1.clientService.dto.requests.ClientCreateRequestDto;
 import com.banka1.clientService.dto.requests.ClientUpdateRequestDto;
-import com.banka1.clientService.dto.responses.ClientIdResponseDto;
+import com.banka1.clientService.dto.responses.ClientInfoResponseDto;
 import com.banka1.clientService.dto.responses.ClientResponseDto;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -66,5 +66,14 @@ public interface ClientService {
      * @param jmbg JMBG klijenta
      * @return DTO sa ID-em klijenta
      */
-    ClientIdResponseDto getIdByJmbg(String jmbg);
+    ClientInfoResponseDto getInfoByJmbg(String jmbg);
+
+    /**
+     * Vraca osnovne informacije o klijentu na osnovu internog ID-a.
+     * Endpoint dostupan samo SERVICE tokenima.
+     *
+     * @param id identifikator klijenta
+     * @return DTO sa ID-em, imenom i prezimenom klijenta
+     */
+    ClientInfoResponseDto getInfoById(Long id);
 }
