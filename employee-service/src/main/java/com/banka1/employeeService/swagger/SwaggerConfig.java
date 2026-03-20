@@ -17,10 +17,10 @@ import org.springframework.context.annotation.Configuration;
 public class SwaggerConfig {
 
     /** Naziv aplikacije koji se prikazuje u Swagger UI. */
-    private static final String APP_TITLE = "User Service API";
+    private static final String APP_TITLE = "Employee Service API";
 
     /** Opis API-ja koji se prikazuje u Swagger UI. */
-    private static final String APP_DESCRIPTION = "API for user and authentication management";
+    private static final String APP_DESCRIPTION = "API for employee and authentication management";
 
     /** Verzija API-ja. */
     private static final String APP_VERSION = "1.0";
