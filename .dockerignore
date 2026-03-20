@@ -1,0 +1,38 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Node (frontend tooling at repo root - never needed in service builds)
+node_modules
+package.json
+package-lock.json
+
+# Setup / infrastructure config (not part of any service build)
+setup
+
+# Gradle build output and caches (rebuilt inside Docker)
+**/build
+**/.gradle
+.gradle
+
+# IDE and editor files
+.idea
+.vscode
+**/*.iml
+
+# Environment files (secrets must not enter build context)
+.env
+.env.*
+!**/.env.example
+
+# Logs and temp files
+**/*.log
+**/tmp
+**/temp
+
+# Documentation
+docs
+**/HELP.md
+CLAUDE.md
+README.md
