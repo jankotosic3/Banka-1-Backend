@@ -1,17 +1,25 @@
 openapi: 3.0.3
 info:
   title: Exchange Service API
-  version: 0.0.1
-  description: Minimal setup contract for exchange-rate and currency-conversion capabilities.
+  version: 1.0.0
+  description: API for fetching, storing, and using exchange rates for client conversions through RSD.
 servers:
   - url: http://localhost:8085
     description: Direct service access
   - url: http://localhost/api/exchange
     description: API gateway access
+tags:
+  - name: Service Info
+  - name: Exchange Rates
+security:
+  - bearerAuth: []
 paths:
   /info:
     get:
+      tags:
+        - Service Info
       summary: Return basic service metadata
+      security: []
       operationId: getExchangeServiceInfo
       responses:
         '200':
@@ -34,3 +42,248 @@ paths:
                   gatewayPrefix:
                     type: string
                     example: /api/exchange
+  /rates/fetch:
+    post:
+      tags:
+        - Exchange Rates
+      summary: Fetch and store daily exchange rates
+      operationId: fetchDailyExchangeRates
+      description: Fetches the fixed supported currency set EUR, CHF, USD, GBP, JPY, CAD and AUD against RSD from Twelve Data. The provider market rate is converted into bank `buyingRate` and `sellingRate` using the configured margin percentage. If the external API fails, the service stores a copy of the previous local snapshot for the new day.
+      responses:
+        '200':
+          description: Rates fetched and stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRateFetchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+  /rates:
+    get:
+      tags:
+        - Exchange Rates
+      summary: Get stored exchange-rate snapshot
+      operationId: getStoredExchangeRates
+      parameters:
+        - name: date
+          in: query
+          required: false
+          description: Optional snapshot date. If omitted, the latest stored snapshot is returned.
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Stored exchange rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExchangeRate'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /rates/{currencyCode}:
+    get:
+      tags:
+        - Exchange Rates
+      summary: Get a single stored exchange rate
+      operationId: getStoredExchangeRate
+      parameters:
+        - name: currencyCode
+          in: path
+          required: true
+          schema:
+            type: string
+            example: EUR
+            enum: [RSD, EUR, CHF, USD, GBP, JPY, CAD, AUD]
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Stored exchange rate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /calculate:
+    get:
+      tags:
+        - Exchange Rates
+      summary: Calculate currency equivalence through RSD base
+      operationId: calculateCurrencyEquivalence
+      parameters:
+        - name: fromCurrency
+          in: query
+          required: true
+          schema:
+            type: string
+            example: EUR
+            enum: [RSD, EUR, CHF, USD, GBP, JPY, CAD, AUD]
+        - name: toCurrency
+          in: query
+          required: true
+          schema:
+            type: string
+            example: USD
+            enum: [RSD, EUR, CHF, USD, GBP, JPY, CAD, AUD]
+        - name: amount
+          in: query
+          required: true
+          schema:
+            type: number
+            format: decimal
+            example: 100.00
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+            example: 2026-03-22
+      responses:
+        '200':
+          description: Conversion result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Requested exchange rate snapshot not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadGateway:
+      description: External Twelve Data fetch failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ExchangeRate:
+      type: object
+      required:
+        - currencyCode
+        - buyingRate
+        - sellingRate
+        - date
+        - createdAt
+      properties:
+        currencyCode:
+          type: string
+          example: EUR
+        buyingRate:
+          type: number
+          format: decimal
+          example: 116.22600000
+        sellingRate:
+          type: number
+          format: decimal
+          example: 118.57400000
+        date:
+          type: string
+          format: date
+          example: 2026-03-22
+        createdAt:
+          type: string
+          format: date-time
+          example: 2026-03-22T10:15:30Z
+    ExchangeRateFetchResponse:
+      type: object
+      required:
+        - fetchedCount
+        - rates
+      properties:
+        fetchedCount:
+          type: integer
+          example: 7
+        rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExchangeRate'
+    ConversionResponse:
+      type: object
+      required:
+        - fromCurrency
+        - toCurrency
+        - fromAmount
+        - toAmount
+        - rate
+        - commission
+        - date
+      properties:
+        fromCurrency:
+          type: string
+          example: EUR
+        toCurrency:
+          type: string
+          example: USD
+        fromAmount:
+          type: number
+          format: decimal
+          example: 100.00
+        toAmount:
+          type: number
+          format: decimal
+          example: 94.50000000
+        rate:
+          type: number
+          format: decimal
+          example: 0.94500000
+        commission:
+          type: number
+          format: decimal
+          example: 0.70
+        date:
+          type: string
+          format: date
+          example: 2026-03-20
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - title
+        - message
+        - validationErrors
+      properties:
+        code:
+          type: string
+          example: ERR_EXCHANGE_RATE_NOT_FOUND
+        title:
+          type: string
+          example: Kurs nije pronadjen
+        message:
+          type: string
+          example: Kurs za valutu EUR nije pronadjen za datum 2026-03-22.
+        validationErrors:
+          type: object
+          additionalProperties:
+            type: string

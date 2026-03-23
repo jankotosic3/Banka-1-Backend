@@ -1,11 +1,32 @@
 HELP.md
-.gradle
+
+# Gradle
+.gradle/
+.gradle-home/
+.gradle-local/
 build/
 !gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
 
-### STS ###
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs and runtime files
+*.log
+*.out
+*.err
+hs_err_pid*
+replay_pid*
+
+# IDEs
+.idea/
+*.iws
+*.iml
+*.ipr
+
+.vscode/
+
 .apt_generated
 .classpath
 .factorypath
@@ -13,28 +34,27 @@ build/
 .settings
 .springBeans
 .sts4-cache
-bin/
-!**/src/main/**/bin/
-!**/src/test/**/bin/
 
-### IntelliJ IDEA ###
-.idea
-*.iws
-*.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-
-### NetBeans ###
 /nbproject/private/
 /nbbuild/
-/dist/
 /nbdist/
 /.nb-gradle/
 
-### VS Code ###
-.vscode/
+# Build/tool outputs
+out/
+target/
+dist/
+coverage/
+node_modules/
 
-# Ignore environment variables
-.env
+# Temp
+tmp/
+temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Optional local tooling
+.claude

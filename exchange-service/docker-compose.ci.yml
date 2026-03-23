@@ -26,6 +26,7 @@ services:
       EXCHANGE_DB_USER: postgres
       EXCHANGE_DB_PASSWORD: postgres
       JWT_SECRET: test_secret_key_at_least_32_characters_long
+      TWELVE_DATA_API_KEY: ci-placeholder-key
     depends_on:
       postgres:
         condition: service_healthy

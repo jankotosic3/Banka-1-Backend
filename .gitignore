@@ -5,6 +5,7 @@
 /gradlew.bat
 build/
 out/
+/.gradle-local/
 
 # Maven
 target/
