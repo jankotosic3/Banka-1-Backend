@@ -28,7 +28,27 @@ public enum ErrorCode {
             HttpStatus.INTERNAL_SERVER_ERROR,
             "ERR_CARD_003",
             "Card number generation failed"
-    );
+    ),
+
+    /**
+     * Returned when no card exists for the given card number.
+     */
+    CARD_NOT_FOUND(HttpStatus.NOT_FOUND, "ERR_CARD_004", "Card not found"),
+
+    /**
+     * Returned when the requested status transition is not allowed by the state machine.
+     */
+    INVALID_STATUS_TRANSITION(HttpStatus.UNPROCESSABLE_ENTITY, "ERR_CARD_005", "Invalid status transition"),
+
+    /**
+     * Returned when a negative or null card limit is provided.
+     */
+    INVALID_LIMIT(HttpStatus.BAD_REQUEST, "ERR_CARD_006", "Invalid card limit"),
+
+    /**
+     * Returned when a client attempts to perform an action on a card they do not own.
+     */
+    ACCESS_DENIED(HttpStatus.FORBIDDEN, "ERR_CARD_007", "Access denied");
 
     /**
      * HTTP status mapped by the global exception handler.

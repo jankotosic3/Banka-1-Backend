@@ -6,5 +6,6 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.17.xsd">
 
     <include file="db/changelog/001-initial-schema.sql"/>
+    <include file="db/changelog/002-add-client-id-to-cards.sql"/>
 
 </databaseChangeLog>
