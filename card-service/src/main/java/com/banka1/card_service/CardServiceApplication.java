@@ -4,17 +4,15 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
- * Glavna klasa Card Service mikroservisa.
- * Ovaj servis upravlja debitnim karticama povezanim sa bankovnim racunima
- * (kreiranje, blokiranje, deblokiranje, deaktivacija, provera limita).
+ * Entry point for the Card Service microservice.
  */
 @SpringBootApplication
 public class CardServiceApplication {
 
 	/**
-	 * Pokretanje Spring Boot aplikacije.
+	 * Starts the Spring Boot application.
 	 *
-	 * @param args argumenti komandne linije
+	 * @param args command line arguments
 	 */
 	public static void main(String[] args) {
 		SpringApplication.run(CardServiceApplication.class, args);

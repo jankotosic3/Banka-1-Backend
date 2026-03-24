@@ -5,15 +5,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 /**
- * Osnovna integracija test klasa za Card Service.
- * Proverava da li se Spring kontekst uspesno ucitava.
+ * Basic integration test that verifies the Spring context loads.
  */
 @SpringBootTest
 @ActiveProfiles("test")
 class CardServiceApplicationTests {
 
 	/**
-	 * Proverava da li se aplikacijski kontekst uspesno pokrece.
+	 * Verifies that the application context starts successfully.
 	 */
 	@Test
 	void contextLoads() {
