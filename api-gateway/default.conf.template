@@ -1,3 +1,4 @@
+
 upstream employee_service {
     server employee-service:${SERVER_PORT};
 }
@@ -65,8 +66,9 @@ server {
     }
 
     # Transfer Service - Swagger/OpenAPI docs (must be before the general /transfers/ location)
-    location /transfers/swagger-ui/ {
-        proxy_pass http://transfer_service/swagger-ui/;
+    location ~ ^/transfers/swagger-ui(/.*)?$ {
+        rewrite ^/transfers/swagger-ui(.*)$ /swagger-ui$1 break;
+        proxy_pass http://transfer_service;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
