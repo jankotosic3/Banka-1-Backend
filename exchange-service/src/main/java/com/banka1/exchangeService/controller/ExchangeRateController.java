@@ -51,7 +51,7 @@ public class ExchangeRateController {
      *         and the list of stored rates
      */
     @PostMapping("/rates/fetch")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN','SERVICE')")
     @Operation(
             summary = "Fetch and store daily exchange rates",
             responses = @ApiResponse(
@@ -72,6 +72,7 @@ public class ExchangeRateController {
      * @return list of daily exchange rates sorted by currency code
      */
     @GetMapping("/rates")
+    @PreAuthorize("hasAnyRole('ADMIN','SERVICE')")
     @Operation(
             summary = "Get stored exchange rates",
             responses = @ApiResponse(
@@ -97,6 +98,8 @@ public class ExchangeRateController {
      */
     @GetMapping("/rates/{currencyCode}")
     @Operation(summary = "Get a single exchange rate")
+    @PreAuthorize("hasAnyRole('ADMIN','SERVICE')")
+
     public ExchangeRateDto getRate(
             @PathVariable String currencyCode,
             @RequestParam(required = false)
@@ -117,6 +120,7 @@ public class ExchangeRateController {
      */
     @GetMapping("/calculate")
     @Operation(summary = "Calculate currency equivalence via RSD base")
+    @PreAuthorize("hasAnyRole('ADMIN','SERVICE')")
     public ConversionResponseDto calculate(@Valid ConversionQueryDto request) {
         return exchangeRateService.convert(new ConversionRequestDto(
                 request.getAmount(),
