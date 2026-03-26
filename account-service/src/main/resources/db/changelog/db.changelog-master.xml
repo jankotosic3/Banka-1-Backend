@@ -23,4 +23,10 @@
                 splitStatements="true"/>
     </changeSet>
 
+    <changeSet id="004-fix-bank-account-concrete" author="account-service">
+        <sqlFile
+                path="db/changelog/004-fix-bank-account-concrete.sql"
+                splitStatements="true"/>
+    </changeSet>
+
 </databaseChangeLog>

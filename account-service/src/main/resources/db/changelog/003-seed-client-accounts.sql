@@ -2,7 +2,7 @@
 
 -- changeset account-service:3
 -- comment: Seed checking and FX accounts for the 8 test clients (IDs 1-8 from client-service)
--- Account number format: 111(bank) + 0001(branch) + 9 random digits + 2-digit type code = 18 digits
+-- Account number format: 111(bank) + 0001(branch) + 10 random digits + 2-digit type code = 19 digits
 -- Type codes: STANDARDNI=11, STEDNI=13, ZA_MLADE=15, FX_PERSONAL=21, FX_BUSINESS=22
 
 -- =========================
@@ -22,7 +22,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000110000000111',
+    0, 'CHECKING', '1110001100000000111',
     'Marko', 'Markovic',
     'marko.markovic@banka.com', 'marko.markovic', 'Tekuci racun',
     1, 1,
@@ -51,7 +51,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000120000000111',
+    0, 'CHECKING', '1110001200000000111',
     'Ana', 'Anic',
     'ana.anic@banka.com', 'ana.anic', 'Tekuci racun',
     2, 1,
@@ -80,7 +80,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000130000000111',
+    0, 'CHECKING', '1110001300000000111',
     'Jovana', 'Jovanovic',
     'jovana.jovanovic@banka.com', 'jovana.jovanovic', 'Tekuci racun',
     3, 1,
@@ -106,7 +106,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'FX', '111000130000000221',
+    0, 'FX', '1110001300000000221',
     'Jovana', 'Jovanovic',
     NULL, NULL, 'Devizni racun EUR',
     3, 1,
@@ -135,7 +135,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000140000000111',
+    0, 'CHECKING', '1110001400000000111',
     'Stefan', 'Stefanovic',
     'stefan.stefanovic@banka.com', 'stefan.stefanovic', 'Tekuci racun',
     4, 1,
@@ -161,7 +161,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'FX', '111000140000000221',
+    0, 'FX', '1110001400000000221',
     'Stefan', 'Stefanovic',
     NULL, NULL, 'Devizni racun USD',
     4, 1,
@@ -190,7 +190,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000150000000113',
+    0, 'CHECKING', '1110001500000000113',
     'Milica', 'Milic',
     'milica.milic@banka.com', 'milica.milic', 'Stedni racun',
     5, 1,
@@ -219,7 +219,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000160000000111',
+    0, 'CHECKING', '1110001600000000111',
     'Nikola', 'Nikolic',
     'nikola.nikolic@banka.com', 'nikola.nikolic', 'Tekuci racun',
     6, 1,
@@ -245,7 +245,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'FX', '111000160000000221',
+    0, 'FX', '1110001600000000221',
     'Nikola', 'Nikolic',
     NULL, NULL, 'Devizni racun EUR',
     6, 1,
@@ -274,7 +274,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000170000000115',
+    0, 'CHECKING', '1110001700000000115',
     'Jelena', 'Jelic',
     'jelena.jelic@banka.com', 'jelena.jelic', 'Racun za mlade',
     7, 1,
@@ -303,7 +303,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'CHECKING', '111000180000000111',
+    0, 'CHECKING', '1110001800000000111',
     'Aleksandar', 'Aleksic',
     'aleksandar.aleksic@banka.com', 'aleksandar.aleksic', 'Tekuci racun',
     8, 1,
@@ -329,7 +329,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'FX', '111000180000000221',
+    0, 'FX', '1110001800000000221',
     'Aleksandar', 'Aleksic',
     NULL, NULL, 'Devizni racun EUR',
     8, 1,
@@ -355,7 +355,7 @@ INSERT INTO account_table (
     company_id, account_concrete, odrzavanje_racuna, account_ownership_type
 )
 SELECT
-    0, 'FX', '111000180000000321',
+    0, 'FX', '1110001800000000321',
     'Aleksandar', 'Aleksic',
     NULL, NULL, 'Devizni racun USD',
     8, 1,
