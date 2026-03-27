@@ -1,9 +1,6 @@
 package com.banka1.account_service.rest_client;
 
-
-import com.banka1.account_service.dto.request.ValidateRequest;
-import com.banka1.account_service.dto.response.ValidateResponse;
-import lombok.RequiredArgsConstructor;
+import com.banka1.account_service.dto.response.VerificationStatusResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -17,12 +14,10 @@ public class VerificationService {
         this.restClient = restClient;
     }
 
-    public ValidateResponse validate(ValidateRequest request)
-    {
-        return restClient.post()
-                .uri("/validate")
-                .body(request)
+    public VerificationStatusResponse getStatus(Long sessionId) {
+        return restClient.get()
+                .uri("/{sessionId}/status", sessionId)
                 .retrieve()
-                .body(ValidateResponse.class);
+                .body(VerificationStatusResponse.class);
     }
 }

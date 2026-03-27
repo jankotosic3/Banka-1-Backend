@@ -2,11 +2,9 @@ package com.banka1.transaction_service.service.implementation;
 
 import com.banka1.transaction_service.domain.Payment;
 import com.banka1.transaction_service.domain.enums.TransactionStatus;
-import com.banka1.transaction_service.domain.enums.VerificationStatus;
 import com.banka1.transaction_service.dto.request.ApproveDto;
 import com.banka1.transaction_service.dto.request.NewPaymentDto;
 import com.banka1.transaction_service.dto.request.PaymentDto;
-import com.banka1.transaction_service.dto.request.ValidateRequest;
 import com.banka1.transaction_service.dto.response.*;
 import com.banka1.transaction_service.exception.BusinessException;
 import com.banka1.transaction_service.exception.ErrorCode;
@@ -53,6 +51,8 @@ public class TransactionServiceImplementation implements TransactionService {
     private String appPropertiesId;
     @Value("${banka.security.roles-claim}")
     private String roles;
+    @Value("${transaction.verification.skip:true}")
+    private boolean skipVerification;
     private final TransactionServiceInternal transactionServiceInternal;
     private final PaymentRepository paymentRepository;
 
@@ -61,9 +61,13 @@ public class TransactionServiceImplementation implements TransactionService {
 //    @Transactional
     @Override
     public String newPayment(Jwt jwt, NewPaymentDto newPaymentDto) {
-        ValidateResponse validateResponse= verificationService.validate(new ValidateRequest(newPaymentDto.getVerificationSessionId(),newPaymentDto.getVerificationCode()));
-        if(validateResponse==null || validateResponse.getStatus()!= VerificationStatus.VERIFIED)
-            throw new BusinessException(ErrorCode.VERIFICATION_FAILED,ErrorCode.VERIFICATION_FAILED.getTitle());
+        if (!skipVerification) {
+            VerificationStatusResponse verificationStatusResponse = verificationService.getStatus(newPaymentDto.getVerificationSessionId());
+            if (verificationStatusResponse == null || !verificationStatusResponse.isVerified())
+                throw new BusinessException(ErrorCode.VERIFICATION_FAILED, ErrorCode.VERIFICATION_FAILED.getTitle());
+        } else {
+            log.warn("SKIP_VERIFICATION=true, preskačem proveru verifikacionog koda");
+        }
         InfoResponseDto infoResponseDto=accountService.getInfo(newPaymentDto.getFromAccountNumber(),newPaymentDto.getToAccountNumber());
         if(infoResponseDto == null)
             throw new IllegalStateException("Greska sa account servisom");

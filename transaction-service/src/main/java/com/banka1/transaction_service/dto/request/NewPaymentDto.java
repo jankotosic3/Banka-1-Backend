@@ -33,8 +33,6 @@ public class NewPaymentDto {
     private String referenceNumber;
     @NotBlank(message = "Unesi svrhu placanja")
     private String paymentPurpose;
-    @NotBlank(message = "Unesi kod za verifikaciju")
-    private String verificationCode;
     @NotNull(message = "Unesi verification session ID")
     private Long verificationSessionId;
 

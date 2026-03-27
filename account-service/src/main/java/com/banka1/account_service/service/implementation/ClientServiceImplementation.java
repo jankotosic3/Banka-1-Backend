@@ -2,11 +2,9 @@ package com.banka1.account_service.service.implementation;
 
 import com.banka1.account_service.domain.Account;
 import com.banka1.account_service.domain.enums.Status;
-import com.banka1.account_service.domain.enums.VerificationStatus;
 import com.banka1.account_service.dto.request.EditAccountLimitDto;
 import com.banka1.account_service.dto.request.EditAccountNameDto;
 import com.banka1.account_service.dto.request.EditStatus;
-import com.banka1.account_service.dto.request.ValidateRequest;
 import com.banka1.account_service.rabbitMQ.CardEventDto;
 import com.banka1.account_service.rabbitMQ.CardEventType;
 import com.banka1.account_service.rest_client.CardServiceRestClient;
@@ -41,6 +39,8 @@ public class ClientServiceImplementation implements ClientService {
     private String appPropertiesId;
 
     private final VerificationService verificationService;
+    @Value("${account.verification.skip:true}")
+    private boolean skipVerification;
     private final RabbitClient rabbitClient;
     private final RestClientService restClientService;
     private final CardServiceRestClient cardServiceRestClient;
@@ -131,9 +131,11 @@ public class ClientServiceImplementation implements ClientService {
         if(editAccountLimitDto.getDailyLimit().compareTo(editAccountLimitDto.getMonthlyLimit()) > 0)
             throw new IllegalArgumentException("Dnevni limit mora biti manji ili jednak od mesecnog");
 
-        ValidateResponse validateResponse=verificationService.validate(new ValidateRequest(editAccountLimitDto.getVerificationSessionId(),editAccountLimitDto.getVerificationCode()));
-        if(validateResponse==null || validateResponse.getStatus()!= VerificationStatus.VERIFIED)
-            throw new BusinessException(ErrorCode.VERIFICATION_FAILED,ErrorCode.VERIFICATION_FAILED.getTitle());
+        if (!skipVerification) {
+            VerificationStatusResponse verificationStatusResponse = verificationService.getStatus(editAccountLimitDto.getVerificationSessionId());
+            if (verificationStatusResponse == null || !verificationStatusResponse.isVerified())
+                throw new BusinessException(ErrorCode.VERIFICATION_FAILED, ErrorCode.VERIFICATION_FAILED.getTitle());
+        }
 
         account.setDnevniLimit(editAccountLimitDto.getDailyLimit());
         account.setMesecniLimit(editAccountLimitDto.getMonthlyLimit());

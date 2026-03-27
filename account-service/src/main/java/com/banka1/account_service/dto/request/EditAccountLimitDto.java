@@ -52,12 +52,6 @@ public class EditAccountLimitDto {
     private BigDecimal monthlyLimit;
 
     /**
-     * Kod za verifikaciju koji je korisnik prosledio iz mobilne aplikacije.
-     */
-    @NotBlank(message = "Unesi kod za verifikaciju")
-    private String verificationCode;
-
-    /**
      * ID sesije verifikacije koja je iniciјalna na mobilnoj aplikaciji.
      */
     @NotNull(message = "Unesi verification session ID")
