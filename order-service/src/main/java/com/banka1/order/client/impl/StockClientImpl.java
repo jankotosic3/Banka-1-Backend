@@ -3,6 +3,7 @@ package com.banka1.order.client.impl;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.StockExchangeDto;
 import com.banka1.order.dto.StockListingDto;
+import com.banka1.order.dto.ExchangeStatusDto;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -52,5 +53,17 @@ public class StockClientImpl implements StockClient {
                 .uri("/api/stock-exchanges/{id}/is-open", id)
                 .retrieve()
                 .body(Boolean.class);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public ExchangeStatusDto getExchangeStatus(Long id) {
+        // Assume the endpoint returns ExchangeStatusDto
+        return stockRestClient.get()
+                .uri("/api/stock-exchanges/{id}/status", id)
+                .retrieve()
+                .body(ExchangeStatusDto.class);
     }
 }

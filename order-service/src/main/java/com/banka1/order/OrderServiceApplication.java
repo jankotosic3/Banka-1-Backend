@@ -2,12 +2,14 @@ package com.banka1.order;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 /**
  * Entry point for the Order Service microservice.
  * Covers actuary management, order execution, portfolio tracking, and tax collection.
  */
 @SpringBootApplication
+@EnableAsync
 public class OrderServiceApplication {
 
     /**

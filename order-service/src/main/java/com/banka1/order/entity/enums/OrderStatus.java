@@ -4,6 +4,8 @@ package com.banka1.order.entity.enums;
  * Lifecycle status of a brokerage order.
  */
 public enum OrderStatus {
+    /** Created but waiting for an explicit client/agent confirmation before finalization. */
+    PENDING_CONFIRMATION,
     /** Waiting for supervisor approval (applies to agents with needApproval=true or exceeded limits). */
     PENDING,
     /** Approved by a supervisor and queued for execution. */

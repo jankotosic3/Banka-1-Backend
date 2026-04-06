@@ -1,5 +1,6 @@
 package com.banka1.order.client;
 
+import com.banka1.order.dto.ExchangeStatusDto;
 import com.banka1.order.dto.StockExchangeDto;
 import com.banka1.order.dto.StockListingDto;
 
@@ -32,4 +33,12 @@ public interface StockClient {
      * @return {@code true} if the exchange is open, {@code false} otherwise
      */
     Boolean isStockExchangeOpen(Long id);
+
+    /**
+     * Gets the status of a stock exchange.
+     *
+     * @param id the exchange's unique identifier
+     * @return exchange status
+     */
+    ExchangeStatusDto getExchangeStatus(Long id);
 }

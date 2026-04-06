@@ -52,4 +52,15 @@ public class EmployeeClientImpl implements EmployeeClient {
                 .retrieve()
                 .body(EmployeePageResponse.class);
     }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public EmployeeDto getBankAccount(String currency) {
+        return employeeRestClient.get()
+                .uri("/employee/accounts/bank/{currency}", currency)
+                .retrieve()
+                .body(EmployeeDto.class);
+    }
 }

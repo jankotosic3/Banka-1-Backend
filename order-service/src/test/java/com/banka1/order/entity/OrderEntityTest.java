@@ -88,6 +88,7 @@ class OrderEntityTest {
     @Test
     void allOrderStatusValues_exist() {
         assertThat(OrderStatus.values()).containsExactlyInAnyOrder(
+                OrderStatus.PENDING_CONFIRMATION,
                 OrderStatus.PENDING,
                 OrderStatus.APPROVED,
                 OrderStatus.DECLINED,

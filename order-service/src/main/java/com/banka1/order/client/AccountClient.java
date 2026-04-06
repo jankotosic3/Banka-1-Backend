@@ -1,6 +1,7 @@
 package com.banka1.order.client;
 
 import com.banka1.order.dto.AccountDetailsDto;
+import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.response.UpdatedBalanceResponseDto;
 import com.banka1.order.dto.client.PaymentDto;
 
@@ -19,22 +20,17 @@ public interface AccountClient {
     AccountDetailsDto getAccountDetails(String accountNumber);
 
     /**
-     * Fetches details of a bank account by its internal ID.
-     * @param id internal account id
-     * @return account details
+     * Fetches details of a bank account by its ID.
+     *
+     * @param accountId the account ID to look up
+     * @return account details including balance and currency
      */
-    AccountDetailsDto getAccountDetailsById(Long id);
+    AccountDetailsDto getAccountDetails(Long accountId);
 
     /**
-     * Executes an internal transaction between two accounts using account-service.
-     * @param paymentDto payment details
-     * @return updated balances response
+     * Performs a transaction between accounts.
+     *
+     * @param request the transaction request
      */
-    UpdatedBalanceResponseDto transaction(PaymentDto paymentDto);
-
-    /**
-     * Returns the government's (company) dinar bank account (RSD).
-     * Expected to call account-service endpoint: GET /employee/accounts/bank/RSD
-     */
-    AccountDetailsDto getGovernmentBankAccountRsd();
+    void transfer(AccountTransactionRequest request);
 }

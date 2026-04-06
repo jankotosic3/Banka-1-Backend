@@ -17,4 +17,6 @@ public class AccountDetailsDto {
     private String currency;
     /** Internal ID of the account owner. */
     private Long ownerId;
+    /** Approved credit available for margin-backed trading. */
+    private BigDecimal availableCredit;
 }

@@ -2,7 +2,7 @@ package com.banka1.order.client.impl;
 
 import com.banka1.order.client.AccountClient;
 import com.banka1.order.dto.AccountDetailsDto;
-import com.banka1.order.dto.response.UpdatedBalanceResponseDto;
+import com.banka1.order.dto.AccountTransactionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -32,30 +32,26 @@ public class AccountClientImpl implements AccountClient {
                 .body(AccountDetailsDto.class);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
-    public UpdatedBalanceResponseDto transaction(com.banka1.order.dto.client.PaymentDto paymentDto) {
-        return accountRestClient.post()
+    public AccountDetailsDto getAccountDetails(Long accountId) {
+        return accountRestClient.get()
+                .uri("/internal/accounts/{accountId}/details", accountId)
+                .retrieve()
+                .body(AccountDetailsDto.class);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void transfer(AccountTransactionRequest request) {
+        accountRestClient.post()
                 .uri("/internal/accounts/transaction")
-                .body(paymentDto)
+                .body(request)
                 .retrieve()
-                .body(UpdatedBalanceResponseDto.class);
-    }
-
-    @Override
-    public AccountDetailsDto getGovernmentBankAccountRsd() {
-        return accountRestClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/employee/accounts/bank/{currency}")
-                        .build("RSD"))
-                .retrieve()
-                .body(AccountDetailsDto.class);
-    }
-
-    @Override
-    public AccountDetailsDto getAccountDetailsById(Long id) {
-        return accountRestClient.get()
-                .uri("/accounts/{id}", id)
-                .retrieve()
-                .body(AccountDetailsDto.class);
+                .toBodilessEntity();
     }
 }

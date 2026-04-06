@@ -29,4 +29,12 @@ public interface EmployeeClient {
      * @return paginated list of matching employees
      */
     EmployeePageResponse searchEmployees(String email, String ime, String prezime, String pozicija, int page, int size);
+
+    /**
+     * Gets the bank account for a given currency.
+     *
+     * @param currency the currency code
+     * @return employee DTO representing the bank account
+     */
+    EmployeeDto getBankAccount(String currency);
 }
