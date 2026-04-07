@@ -20,4 +20,14 @@ public interface ExchangeClient {
      * @return conversion result including the exchange rate and converted amount
      */
     ExchangeRateDto calculate(String fromCurrency, String toCurrency, BigDecimal amount);
+
+    /**
+     * Calculates the converted amount between two currencies without applying commission.
+     *
+     * @param fromCurrency source currency code
+     * @param toCurrency   target currency code
+     * @param amount       the amount to convert
+     * @return conversion result for commission-free internal flows
+     */
+    ExchangeRateDto calculateWithoutCommission(String fromCurrency, String toCurrency, BigDecimal amount);
 }

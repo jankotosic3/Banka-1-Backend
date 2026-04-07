@@ -1,20 +1,31 @@
 package com.banka1.order.service.impl;
 
 import com.banka1.order.client.AccountClient;
+import com.banka1.order.client.EmployeeClient;
+import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
-import com.banka1.order.client.impl.StockClientImpl;
+import com.banka1.order.dto.AccountDetailsDto;
+import com.banka1.order.dto.AuthenticatedUser;
+import com.banka1.order.dto.ExchangeRateDto;
+import com.banka1.order.dto.EmployeeDto;
+import com.banka1.order.dto.PortfolioSummaryResponse;
 import com.banka1.order.dto.SetPublicQuantityRequestDto;
 import com.banka1.order.dto.PortfolioResponse;
 import com.banka1.order.dto.StockListingDto;
+import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.entity.Portfolio;
 import com.banka1.order.entity.enums.ListingType;
 import com.banka1.order.entity.enums.OptionType;
 import com.banka1.order.repository.PortfolioRepository;
 import com.banka1.order.service.PortfolioService;
+import com.banka1.order.service.TaxService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -35,34 +46,42 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PortfolioServiceImpl implements PortfolioService {
 
+    private static final int OPTION_CONTRACT_SHARES = 100;
+    private static final String RSD = "RSD";
+
     private final PortfolioRepository portfolioRepository;
     private final StockClient stockClient;
     private final AccountClient accountClient;
+    private final EmployeeClient employeeClient;
+    private final ExchangeClient exchangeClient;
+    private final TaxService taxService;
 
     /**
      * Retrieves all portfolio positions for a given user and maps them
      * into response DTOs enriched with market and profit information.
      *
-     * @param userId ID of the user whose portfolio is being fetched
+     * @param user ID of the user whose portfolio is being fetched
      * @return list of portfolio positions in response format
      */
     @Override
-    public List<PortfolioResponse> getPortfolio(Long userId) {
+    public PortfolioSummaryResponse getPortfolio(AuthenticatedUser user) {
 
-        List<Portfolio> holdings = portfolioRepository.findByUserId(userId);
+        List<Portfolio> holdings = portfolioRepository.findByUserId(user.userId());
 
-        BigDecimal totalProfit = holdings.stream()
-                .map(this::mapToResponse)
-                .map(PortfolioResponse::getProfit)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        List<PortfolioResponse> response = holdings.stream()
+        List<PortfolioResponse> responses = holdings.stream()
                 .map(this::mapToResponse)
                 .toList();
 
-        response.forEach(r -> r.setTotalProfit(totalProfit));
+        BigDecimal totalProfit = responses.stream()
+                .map(PortfolioResponse::getProfit)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        return response;
+        PortfolioSummaryResponse summary = new PortfolioSummaryResponse();
+        summary.setHoldings(responses);
+        summary.setTotalProfit(totalProfit);
+        summary.setYearlyTaxPaid(taxService.getCurrentYearPaidTax(user.userId()));
+        summary.setMonthlyTaxDue(taxService.getCurrentMonthUnpaidTax(user.userId()));
+        return summary;
     }
 
     /**
@@ -79,12 +98,14 @@ public class PortfolioServiceImpl implements PortfolioService {
      * @throws IllegalArgumentException if portfolio not found or invalid type/quantity
      */
     @Override
-    public void setPublicQuantity(Long portfolioId, SetPublicQuantityRequestDto request) {
-        Portfolio portfolio = portfolioRepository.findById(portfolioId)
-                .orElseThrow(() -> new IllegalArgumentException("Portfolio not found"));
+    public void setPublicQuantity(AuthenticatedUser user, Long portfolioId, SetPublicQuantityRequestDto request) {
+        Portfolio portfolio = getOwnedPortfolio(user.userId(), portfolioId);
 
         if (portfolio.getListingType() != ListingType.STOCK) {
             throw new IllegalArgumentException("Only STOCK positions can be made public");
+        }
+        if (request.getPublicQuantity() == null || request.getPublicQuantity() < 0) {
+            throw new IllegalArgumentException("Public quantity cannot be negative");
         }
 
         if (request.getPublicQuantity() > portfolio.getQuantity()) {
@@ -113,33 +134,36 @@ public class PortfolioServiceImpl implements PortfolioService {
      * - Marks the position as closed (quantity = 0)
      *
      * @param portfolioId portfolio position ID
-     * @param userId user executing the option
+     * @param user  executing the option
      * @throws IllegalArgumentException if portfolio is invalid or not in-the-money
      */
     @Override
-    public void exerciseOption(Long portfolioId, Long userId) {
+    @Transactional
+    public void exerciseOption(AuthenticatedUser user, Long portfolioId) {
+        if (!user.hasRole("AGENT") && !user.hasRole("ACTUARY")) {
+            throw new IllegalArgumentException("Only actuaries can exercise options");
+        }
 
-        Portfolio portfolio = portfolioRepository.findById(portfolioId)
-                .orElseThrow(() -> new IllegalArgumentException("Portfolio not found"));
+        Portfolio optionPortfolio = getOwnedPortfolio(user.userId(), portfolioId);
 
-        if (portfolio.getListingType() != ListingType.OPTION) {
+        if (optionPortfolio.getListingType() != ListingType.OPTION) {
             throw new IllegalArgumentException("Only OPTION positions can be exercised");
         }
 
-        StockListingDto listing = stockClient.getListing(portfolio.getListingId());
+        StockListingDto optionListing = stockClient.getListing(optionPortfolio.getListingId());
+        validateOptionListing(optionListing);
 
-        BigDecimal marketPrice = listing.getPrice();
+        BigDecimal marketPrice = optionListing.getPrice();
+        BigDecimal strikePrice = optionListing.getStrikePrice();
+        LocalDateTime settlementDate = optionListing.getSettlementDate().atStartOfDay();
 
-        BigDecimal strikePrice = listing.getStrikePrice();
-        LocalDateTime settlementDate = listing.getSettlementDate();
-        
         if (settlementDate.isBefore(LocalDateTime.now())) {
             throw new IllegalArgumentException("Option already expired");
         }
 
         boolean inTheMoney;
 
-        if (listing.getOptionType() == OptionType.CALL) {
+        if (optionListing.getOptionType() == OptionType.CALL) {
             inTheMoney = marketPrice.compareTo(strikePrice) > 0;
         } else {
             inTheMoney = marketPrice.compareTo(strikePrice) < 0;
@@ -149,18 +173,20 @@ public class PortfolioServiceImpl implements PortfolioService {
             throw new IllegalArgumentException("Option is not in-the-money");
         }
 
-        int shares = portfolio.getQuantity() * listing.getContractSize();
+        int exercisedShares = optionPortfolio.getQuantity() * OPTION_CONTRACT_SHARES;
+        if (exercisedShares <= 0) {
+            throw new IllegalArgumentException("Option position has no exercisable contracts");
+        }
 
-        BigDecimal profitPerShare = marketPrice.subtract(strikePrice);
+        StockListingDto underlyingListing = resolveUnderlyingListing(optionListing);
+        BigDecimal settlementAmount = strikePrice.multiply(BigDecimal.valueOf(exercisedShares))
+                .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal profit = profitPerShare
-                .multiply(BigDecimal.valueOf(shares));
+        validateUnderlyingPositionForExercise(user.userId(), underlyingListing.getId(), exercisedShares, optionListing.getOptionType());
+        moveExerciseFunds(user.userId(), optionListing.getCurrency(), settlementAmount, optionListing.getOptionType());
+        updateUnderlyingPortfolio(user.userId(), underlyingListing, exercisedShares, strikePrice, optionListing.getOptionType());
 
-        //FALI INTEGRACIJA SA ACCOUNT SERVICE, NEMA ENDPOINT
-
-        portfolio.setQuantity(0);
-
-        portfolioRepository.save(portfolio);
+        portfolioRepository.delete(optionPortfolio);
     }
 
     /**
@@ -199,11 +225,129 @@ public class PortfolioServiceImpl implements PortfolioService {
         response.setTicker(listing.getTicker());
         response.setCurrentPrice(currentPrice);
         response.setProfit(profit);
-        response.setYearlyTaxPaid(BigDecimal.ZERO);
-        response.setMonthlyTaxDue(BigDecimal.ZERO);
-
-        //FALI INTEGRACIJA SA SERVISOM ZA POREZ
+        response.setExercisable(portfolio.getListingType() == ListingType.OPTION ? isOptionExercisable(listing) : null);
 
         return response;
+    }
+
+    private Portfolio getOwnedPortfolio(Long userId, Long portfolioId) {
+        Portfolio portfolio = portfolioRepository.findById(portfolioId)
+                .orElseThrow(() -> new IllegalArgumentException("Portfolio not found"));
+        if (!portfolio.getUserId().equals(userId)) {
+            throw new IllegalArgumentException("Portfolio does not belong to the authenticated user");
+        }
+        return portfolio;
+    }
+
+    private boolean isOptionExercisable(StockListingDto listing) {
+        if (listing == null || listing.getSettlementDate() == null || listing.getOptionType() == null
+                || listing.getPrice() == null || listing.getStrikePrice() == null) {
+            return false;
+        }
+        if (!listing.getSettlementDate().isAfter(LocalDate.now())) {
+            return false;
+        }
+        return listing.getOptionType() == OptionType.CALL
+                ? listing.getPrice().compareTo(listing.getStrikePrice()) > 0
+                : listing.getPrice().compareTo(listing.getStrikePrice()) < 0;
+    }
+
+    private void validateOptionListing(StockListingDto optionListing) {
+        if (optionListing.getSettlementDate() == null || optionListing.getStrikePrice() == null || optionListing.getOptionType() == null) {
+            throw new IllegalStateException("Option listing is missing required exercise metadata");
+        }
+    }
+
+    private StockListingDto resolveUnderlyingListing(StockListingDto optionListing) {
+        if (optionListing.getUnderlyingListingId() == null) {
+            throw new IllegalStateException("Option listing is missing underlying listing metadata");
+        }
+        return stockClient.getListing(optionListing.getUnderlyingListingId());
+    }
+
+    private void moveExerciseFunds(Long userId, String currency, BigDecimal settlementAmount, OptionType optionType) {
+        EmployeeDto bankAccount = employeeClient.getBankAccount(currency);
+        AccountDetailsDto userSettlementAccount = accountClient.getAccountDetails(bankAccount.getId());
+        AccountDetailsDto marketAccount = accountClient.getGovernmentBankAccountRsd();
+        BigDecimal targetAmount = convertAmount(currency, marketAccount.getCurrency(), settlementAmount);
+
+        PaymentDto payment;
+        if (optionType == OptionType.CALL) {
+            payment = new PaymentDto(
+                    userSettlementAccount.getAccountNumber(),
+                    marketAccount.getAccountNumber(),
+                    settlementAmount,
+                    targetAmount,
+                    BigDecimal.ZERO,
+                    userId
+            );
+        } else {
+            payment = new PaymentDto(
+                    marketAccount.getAccountNumber(),
+                    userSettlementAccount.getAccountNumber(),
+                    targetAmount,
+                    settlementAmount,
+                    BigDecimal.ZERO,
+                    userId
+            );
+        }
+        accountClient.transaction(payment);
+    }
+
+    private void updateUnderlyingPortfolio(Long userId, StockListingDto underlyingListing, int exercisedShares,
+                                           BigDecimal strikePrice, OptionType optionType) {
+        Portfolio underlyingPortfolio = portfolioRepository.findByUserIdAndListingId(userId, underlyingListing.getId()).orElse(null);
+
+        if (optionType == OptionType.CALL) {
+            if (underlyingPortfolio == null) {
+                underlyingPortfolio = new Portfolio();
+                underlyingPortfolio.setUserId(userId);
+                underlyingPortfolio.setListingId(underlyingListing.getId());
+                underlyingPortfolio.setListingType(underlyingListing.getListingType() == null ? ListingType.STOCK : underlyingListing.getListingType());
+                underlyingPortfolio.setQuantity(exercisedShares);
+                underlyingPortfolio.setAveragePurchasePrice(strikePrice);
+                portfolioRepository.save(underlyingPortfolio);
+                return;
+            }
+
+            BigDecimal totalValue = underlyingPortfolio.getAveragePurchasePrice()
+                    .multiply(BigDecimal.valueOf(underlyingPortfolio.getQuantity()))
+                    .add(strikePrice.multiply(BigDecimal.valueOf(exercisedShares)));
+            int newQuantity = underlyingPortfolio.getQuantity() + exercisedShares;
+            underlyingPortfolio.setQuantity(newQuantity);
+            underlyingPortfolio.setAveragePurchasePrice(totalValue.divide(BigDecimal.valueOf(newQuantity), 4, RoundingMode.HALF_UP));
+            portfolioRepository.save(underlyingPortfolio);
+            return;
+        }
+
+        if (underlyingPortfolio == null || underlyingPortfolio.getQuantity() < exercisedShares) {
+            throw new IllegalArgumentException("Insufficient underlying stock quantity for PUT exercise");
+        }
+        underlyingPortfolio.setQuantity(underlyingPortfolio.getQuantity() - exercisedShares);
+        if (underlyingPortfolio.getQuantity() == 0) {
+            portfolioRepository.delete(underlyingPortfolio);
+        } else {
+            portfolioRepository.save(underlyingPortfolio);
+        }
+    }
+
+    private void validateUnderlyingPositionForExercise(Long userId, Long underlyingListingId, int exercisedShares,
+                                                       OptionType optionType) {
+        if (optionType != OptionType.PUT) {
+            return;
+        }
+
+        Portfolio underlyingPortfolio = portfolioRepository.findByUserIdAndListingId(userId, underlyingListingId).orElse(null);
+        if (underlyingPortfolio == null || underlyingPortfolio.getQuantity() < exercisedShares) {
+            throw new IllegalArgumentException("Insufficient underlying stock quantity for PUT exercise");
+        }
+    }
+
+    private BigDecimal convertAmount(String fromCurrency, String toCurrency, BigDecimal amount) {
+        if (amount == null || fromCurrency == null || toCurrency == null || fromCurrency.equalsIgnoreCase(toCurrency)) {
+            return amount;
+        }
+        ExchangeRateDto conversion = exchangeClient.calculate(fromCurrency, toCurrency, amount);
+        return conversion == null || conversion.getConvertedAmount() == null ? amount : conversion.getConvertedAmount();
     }
 }

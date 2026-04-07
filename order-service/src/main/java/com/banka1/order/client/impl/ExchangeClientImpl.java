@@ -37,4 +37,17 @@ public class ExchangeClientImpl implements ExchangeClient {
                 .retrieve()
                 .body(ExchangeRateDto.class);
     }
+
+    @Override
+    public ExchangeRateDto calculateWithoutCommission(String fromCurrency, String toCurrency, BigDecimal amount) {
+        return exchangeRestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/internal/calculate/no-commission")
+                        .queryParam("fromCurrency", fromCurrency)
+                        .queryParam("toCurrency", toCurrency)
+                        .queryParam("amount", amount)
+                        .build())
+                .retrieve()
+                .body(ExchangeRateDto.class);
+    }
 }

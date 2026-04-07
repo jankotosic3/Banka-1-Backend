@@ -1,6 +1,7 @@
 package com.banka1.account_service.service.implementation;
 
 import com.banka1.account_service.domain.Account;
+import com.banka1.account_service.domain.enums.CurrencyCode;
 import com.banka1.account_service.domain.enums.Status;
 import com.banka1.account_service.dto.request.PaymentDto;
 import com.banka1.account_service.dto.response.InfoResponseDto;
@@ -136,6 +137,22 @@ public class AccountServiceImplementation implements AccountService {
         Account account = accountRepository.findByBrojRacuna(accountNumber).orElse(null);
         if (account == null)
             throw new NoSuchElementException("Ne postoji racun:" + accountNumber);
+        return InternalAccountDetailsDto.from(account);
+    }
+
+    @Override
+    public InternalAccountDetailsDto getAccountDetails(Long accountId) {
+        Account account = accountRepository.findById(accountId).orElse(null);
+        if (account == null)
+            throw new NoSuchElementException("Ne postoji racun id:" + accountId);
+        return InternalAccountDetailsDto.from(account);
+    }
+
+    @Override
+    public InternalAccountDetailsDto getBankAccountDetails(CurrencyCode currencyCode) {
+        Account account = accountRepository.findBankAccountByCurrencyCode(currencyCode).orElse(null);
+        if (account == null)
+            throw new NoSuchElementException("Ne postoji interni bankovni racun za valutu:" + currencyCode);
         return InternalAccountDetailsDto.from(account);
     }
 

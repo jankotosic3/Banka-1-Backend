@@ -3,7 +3,11 @@ package com.banka1.order.service;
 import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.CreateBuyOrderRequest;
 import com.banka1.order.dto.CreateSellOrderRequest;
+import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
+import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
+
+import java.util.List;
 
 /**
  * Service for creating buy and sell orders.
@@ -29,6 +33,14 @@ public interface OrderCreationService {
     OrderResponse createSellOrder(AuthenticatedUser user, CreateSellOrderRequest request);
 
     /**
+     * Returns the supervisor portal overview of orders with optional status filtering.
+     *
+     * @param statusFilter the requested status filter
+     * @return overview rows for the portal
+     */
+    List<OrderOverviewResponse> getOrders(OrderOverviewStatusFilter statusFilter);
+
+    /**
      * Confirms a draft order and finalizes validation, approval state, and fee transfer.
      *
      * @param user the authenticated owner of the order
@@ -45,6 +57,14 @@ public interface OrderCreationService {
      * @return the updated order response
      */
     OrderResponse cancelOrder(AuthenticatedUser user, Long orderId);
+
+    /**
+     * Cancels only the remaining unexecuted portion of an order for supervisor portal actions.
+     *
+     * @param orderId the order to cancel
+     * @return the updated order response
+     */
+    OrderResponse cancelOrder(Long orderId);
 
     /**
      * Approves a pending actuary order.

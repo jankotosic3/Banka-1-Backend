@@ -37,6 +37,9 @@ public class PortfolioResponse {
     /** Number of units available for OTC trading (stocks only). */
     private Integer publicQuantity;
 
+    /** Whether the option can currently be exercised. Null for non-option holdings. */
+    private Boolean exercisable;
+
     /** Last time this portfolio position was modified. */
     private LocalDateTime lastModified;
 
@@ -46,18 +49,4 @@ public class PortfolioResponse {
     /** Unrealized or realized profit for this position. */
     private BigDecimal profit;
 
-    /**
-     * Total profit of entire user portfolio (sum of all positions).
-     */
-    private BigDecimal totalProfit;
-
-    /**
-     * Total tax paid by the user in the current calendar year (RSD).
-     */
-    private BigDecimal yearlyTaxPaid;
-
-    /**
-     * Tax calculated for the current month that has not yet been charged (RSD).
-     */
-    private BigDecimal monthlyTaxDue;
 }

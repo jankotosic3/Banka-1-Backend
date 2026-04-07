@@ -1,15 +1,22 @@
 package com.banka1.order.controller;
 
+import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.PortfolioResponse;
+import com.banka1.order.dto.PortfolioSummaryResponse;
 import com.banka1.order.dto.SetPublicQuantityRequestDto;
 import com.banka1.order.service.PortfolioService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * REST controller exposing portfolio-related endpoints.
@@ -18,7 +25,8 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/portfolio")
 @RequiredArgsConstructor
-public class PortfolioController {
+public class
+PortfolioController {
 
     private final PortfolioService portfolioService;
 
@@ -31,11 +39,11 @@ public class PortfolioController {
      * @return list of portfolio positions with detailed information
      */
     @GetMapping
-    @PreAuthorize("hasAnyRole('CLIENT','AGENT','SUPERVISOR','ADMIN')")
-    public ResponseEntity<List<PortfolioResponse>> getPortfolio(
-            @RequestParam Long userId
+    @PreAuthorize("hasAnyRole('CLIENT','ACTUARY','AGENT')")
+    public ResponseEntity<PortfolioSummaryResponse> getPortfolio(
+            @AuthenticationPrincipal Jwt jwt
     ) {
-        return ResponseEntity.ok(portfolioService.getPortfolio(userId));
+        return ResponseEntity.ok(portfolioService.getPortfolio(toAuthenticatedUser(jwt)));
     }
 
     /**
@@ -47,12 +55,13 @@ public class PortfolioController {
      * @return 200 OK on success
      */
     @PutMapping("/{id}/set-public")
-    @PreAuthorize("hasAnyRole('CLIENT','AGENT','SUPERVISOR','ADMIN')")
+    @PreAuthorize("hasAnyRole('CLIENT','ACTUARY','AGENT')")
     public ResponseEntity<Void> setPublicQuantity(
+            @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long id,
             @RequestBody @Valid SetPublicQuantityRequestDto request
     ) {
-        portfolioService.setPublicQuantity(id, request);
+        portfolioService.setPublicQuantity(toAuthenticatedUser(jwt), id, request);
         return ResponseEntity.ok().build();
     }
 
@@ -70,13 +79,41 @@ public class PortfolioController {
      * @return 200 OK on successful execution
      */
     @PostMapping("/{id}/exercise-option")
-    @PreAuthorize("hasRole('AGENT')")
+    @PreAuthorize("hasAnyRole('ACTUARY','AGENT')")
     public ResponseEntity<Void> exerciseOption(
-            @PathVariable Long id,
-            @RequestParam Long userId
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long id
     ) {
-        portfolioService.exerciseOption(id, userId);
+        portfolioService.exerciseOption(toAuthenticatedUser(jwt), id);
         return ResponseEntity.ok().build();
+    }
+
+    private AuthenticatedUser toAuthenticatedUser(Jwt jwt) {
+        return new AuthenticatedUser(
+                Long.valueOf(jwt.getSubject()),
+                extractStrings(jwt.getClaim("roles")),
+                extractStrings(jwt.getClaim("permissions"))
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<String> extractStrings(Object claim) {
+        if (claim == null) {
+            return Set.of();
+        }
+        if (claim instanceof String value) {
+            return Set.of(value);
+        }
+        if (claim instanceof Collection<?> values) {
+            Set<String> result = new LinkedHashSet<>();
+            for (Object value : values) {
+                if (value != null) {
+                    result.add(String.valueOf(value));
+                }
+            }
+            return result;
+        }
+        return Set.of(String.valueOf(claim));
     }
 }
 

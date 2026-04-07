@@ -2,6 +2,7 @@ package com.banka1.order.controller;
 
 import com.banka1.order.service.TaxService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -54,8 +55,16 @@ public class TaxController {
      * @return HTTP 200 if successfully triggered
      */
     @PostMapping("/api/tax/capital-gains/run")
+    @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<Void> runTaxCalculation() {
-        taxService.collectMonthlyTax();
+        taxService.collectMonthlyTaxManually();
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/api/tax/collect")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ResponseEntity<Void> collectTax() {
+        taxService.collectMonthlyTaxManually();
         return ResponseEntity.ok().build();
     }
 
@@ -69,6 +78,7 @@ public class TaxController {
      * @return HTTP 200 if successfully triggered
      */
     @PostMapping("/internal/tax/capital-gains/run")
+    @PreAuthorize("hasRole('SERVICE')")
     public ResponseEntity<Void> runTaxCalculationInternal() {
         taxService.collectMonthlyTax();
         return ResponseEntity.ok().build();
@@ -85,6 +95,7 @@ public class TaxController {
      * @return list of user tax debts
      */
     @GetMapping("/api/tax/capital-gains/debts")
+    @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<List<com.banka1.order.dto.TaxDebtResponse>> getAllDebts() {
         return ResponseEntity.ok(taxService.getAllDebts());
     }
@@ -96,7 +107,18 @@ public class TaxController {
      * @return tax debt in RSD
      */
     @GetMapping("/api/tax/capital-gains/{userId}")
+    @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<com.banka1.order.dto.TaxDebtResponse> getUserDebt(@PathVariable Long userId) {
         return ResponseEntity.ok(taxService.getUserDebt(userId));
+    }
+
+    @GetMapping("/api/tax/tracking")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ResponseEntity<List<com.banka1.order.dto.TaxTrackingRowResponse>> getTaxTracking(
+            @RequestParam(required = false) String userType,
+            @RequestParam(required = false) String firstName,
+            @RequestParam(required = false) String lastName
+    ) {
+        return ResponseEntity.ok(taxService.getTaxTracking(userType, firstName, lastName));
     }
 }

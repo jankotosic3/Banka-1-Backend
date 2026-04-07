@@ -1,9 +1,9 @@
 package com.banka1.order.service;
 
+import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.PortfolioResponse;
+import com.banka1.order.dto.PortfolioSummaryResponse;
 import com.banka1.order.dto.SetPublicQuantityRequestDto;
-
-import java.util.List;
 
 /**
  * Business logic interface for "Portal: Moj Portfolio".
@@ -32,7 +32,7 @@ public interface PortfolioService {
      * @param userId the ID of the portfolio owner
      * @return list of portfolio positions with enriched market data
      */
-    List<PortfolioResponse> getPortfolio(Long userId);
+    PortfolioSummaryResponse getPortfolio(AuthenticatedUser user);
 
     /**
      * Sets the number of units available for public OTC trading.
@@ -44,7 +44,7 @@ public interface PortfolioService {
      * @param portfolioId the portfolio position identifier
      * @param request     request containing the new public quantity
      */
-    void setPublicQuantity(Long portfolioId, SetPublicQuantityRequestDto request);
+    void setPublicQuantity(AuthenticatedUser user, Long portfolioId, SetPublicQuantityRequestDto request);
 
     /**
      * Executes an option contract for the given portfolio position.
@@ -66,5 +66,5 @@ public interface PortfolioService {
      * @param portfolioId the portfolio option position
      * @param userId      the ID of the user executing the option
      */
-    void exerciseOption(Long portfolioId, Long userId);
+    void exerciseOption(AuthenticatedUser user, Long portfolioId);
 }

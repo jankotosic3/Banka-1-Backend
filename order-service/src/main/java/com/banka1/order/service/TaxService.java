@@ -1,6 +1,7 @@
 package com.banka1.order.service;
 
 import com.banka1.order.dto.TaxDebtResponse;
+import com.banka1.order.dto.TaxTrackingRowResponse;
 
 import java.util.List;
 
@@ -73,4 +74,30 @@ public interface TaxService {
      * @return user tax debt in RSD
      */
     TaxDebtResponse getUserDebt(Long userId);
+
+    /**
+     * Returns tax already paid in the current calendar year.
+     *
+     * @param userId the user identifier
+     * @return paid tax amount
+     */
+    java.math.BigDecimal getCurrentYearPaidTax(Long userId);
+
+    /**
+     * Returns tax accrued for the current month that is not yet treated as paid.
+     *
+     * @param userId the user identifier
+     * @return unpaid tax amount for the current month
+     */
+    java.math.BigDecimal getCurrentMonthUnpaidTax(Long userId);
+
+    /**
+     * Returns supervisor-facing tax tracking rows for tradable users.
+     *
+     * @param userType optional user type filter: CLIENT or ACTUARY
+     * @param firstName optional first name filter
+     * @param lastName optional last name filter
+     * @return tax tracking rows with debt in RSD
+     */
+    List<TaxTrackingRowResponse> getTaxTracking(String userType, String firstName, String lastName);
 }

@@ -12,6 +12,8 @@ import com.banka1.order.dto.CreateSellOrderRequest;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.ExchangeStatusDto;
+import com.banka1.order.dto.OrderNotificationPayload;
+import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
 import com.banka1.order.dto.StockListingDto;
 import com.banka1.order.entity.ActuaryInfo;
@@ -19,8 +21,10 @@ import com.banka1.order.entity.Order;
 import com.banka1.order.entity.Portfolio;
 import com.banka1.order.entity.enums.ListingType;
 import com.banka1.order.entity.enums.OrderDirection;
+import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.rabbitmq.OrderNotificationProducer;
 import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
 import com.banka1.order.repository.PortfolioRepository;
@@ -34,6 +38,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Implementation of OrderCreationService.
@@ -56,6 +62,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     private final EmployeeClient employeeClient;
     private final ExchangeClient exchangeClient;
     private final OrderExecutionService orderExecutionService;
+    private final OrderNotificationProducer orderNotificationProducer;
 
     @Override
     @Transactional
@@ -100,6 +107,18 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
         order = orderRepository.save(order);
         return mapToResponse(order, approximatePrice, fee);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<OrderOverviewResponse> getOrders(OrderOverviewStatusFilter statusFilter) {
+        List<Order> orders = statusFilter == null || statusFilter == OrderOverviewStatusFilter.ALL
+                ? orderRepository.findAll()
+                : orderRepository.findByStatus(OrderStatus.valueOf(statusFilter.name()));
+
+        return orders.stream()
+                .map(this::mapToOverviewResponse)
+                .toList();
     }
 
     @Override
@@ -149,20 +168,14 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     @Transactional
     public OrderResponse cancelOrder(AuthenticatedUser user, Long orderId) {
         Order order = getOwnedOrder(user.userId(), orderId);
-        if (order.getStatus() == OrderStatus.DONE || order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.DECLINED) {
-            throw new IllegalStateException("Order can no longer be cancelled");
-        }
-        order.setStatus(OrderStatus.CANCELLED);
-        order.setIsDone(true);
-        order = orderRepository.save(order);
+        return cancelOrderInternal(order);
+    }
 
-        StockListingDto listing = stockClient.getListing(order.getListingId());
-        return mapToResponse(order, calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
-                order.getQuantity(), order.getLimitValue(), order.getStopValue()),
-                calculateFee(orderPricingFamily(order.getOrderType()),
-                        calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing, order.getQuantity(),
-                                order.getLimitValue(), order.getStopValue()),
-                        listing.getCurrency()));
+    @Override
+    @Transactional
+    public OrderResponse cancelOrder(Long orderId) {
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        return cancelOrderInternal(order);
     }
 
     @Override
@@ -181,6 +194,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         order.setStatus(OrderStatus.APPROVED);
         order.setApprovedBy(supervisorId);
         order = orderRepository.save(order);
+        publishOrderDecisionNotification(order, supervisorId, OrderStatus.APPROVED);
         orderExecutionService.executeOrderAsync(order.getId());
 
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
@@ -199,6 +213,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         order.setStatus(OrderStatus.DECLINED);
         order.setApprovedBy(supervisorId);
         order = orderRepository.save(order);
+        publishOrderDecisionNotification(order, supervisorId, OrderStatus.DECLINED);
 
         StockListingDto listing = stockClient.getListing(order.getListingId());
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
@@ -248,6 +263,21 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         if (stopValue != null && stopValue.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Stop value must be positive");
         }
+    }
+
+    private OrderResponse cancelOrderInternal(Order order) {
+        if (order.getStatus() == OrderStatus.DONE || order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.DECLINED) {
+            throw new IllegalStateException("Order can no longer be cancelled");
+        }
+        order.setStatus(OrderStatus.CANCELLED);
+        order.setIsDone(true);
+        order = orderRepository.save(order);
+
+        StockListingDto listing = stockClient.getListing(order.getListingId());
+        BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
+                order.getQuantity(), order.getLimitValue(), order.getStopValue());
+        return mapToResponse(order, approximatePrice,
+                calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()));
     }
 
     private Order getOwnedOrder(Long userId, Long orderId) {
@@ -412,6 +442,77 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         }
         ExchangeRateDto conversion = exchangeClient.calculate(fromCurrency, toCurrency, amount);
         return conversion.getConvertedAmount() == null ? amount : conversion.getConvertedAmount();
+    }
+
+    private OrderOverviewResponse mapToOverviewResponse(Order order) {
+        OrderOverviewResponse response = new OrderOverviewResponse();
+        response.setOrderId(order.getId());
+        response.setAgentName(resolveAgentName(order.getUserId()));
+        response.setOrderType(order.getOrderType());
+        response.setListingType(resolveListingType(order.getListingId()));
+        response.setQuantity(order.getQuantity());
+        response.setContractSize(order.getContractSize());
+        response.setPricePerUnit(order.getPricePerUnit());
+        response.setDirection(order.getDirection());
+        response.setRemainingPortions(order.getRemainingPortions());
+        response.setStatus(order.getStatus());
+        return response;
+    }
+
+    private ListingType resolveListingType(Long listingId) {
+        return stockClient.getListing(listingId).getListingType();
+    }
+
+    private String resolveAgentName(Long userId) {
+        if (actuaryInfoRepository.findByEmployeeId(userId).isEmpty()) {
+            return null;
+        }
+        try {
+            EmployeeDto employee = employeeClient.getEmployee(userId);
+            if (employee == null) {
+                return null;
+            }
+            return formatEmployeeName(employee);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to resolve employee name for order owner {}", userId, ex);
+            return null;
+        }
+    }
+
+    private String formatEmployeeName(EmployeeDto employee) {
+        String firstName = employee.getIme() == null ? "" : employee.getIme().trim();
+        String lastName = employee.getPrezime() == null ? "" : employee.getPrezime().trim();
+        String fullName = (firstName + " " + lastName).trim();
+        return fullName.isEmpty() ? employee.getUsername() : fullName;
+    }
+
+    private void publishOrderDecisionNotification(Order order, Long supervisorId, OrderStatus status) {
+        EmployeeDto employee = employeeClient.getEmployee(order.getUserId());
+        OrderNotificationPayload payload = new OrderNotificationPayload();
+        payload.setOrderId(order.getId());
+        payload.setStatus(status);
+        payload.setUserId(order.getUserId());
+        payload.setSupervisorId(supervisorId);
+        payload.setListingId(order.getListingId());
+        payload.setOrderType(order.getOrderType());
+        payload.setDirection(order.getDirection());
+        payload.setUsername(formatEmployeeName(employee));
+        payload.setUserEmail(employee.getEmail());
+        payload.setTemplateVariables(Map.of(
+                "orderId", String.valueOf(order.getId()),
+                "status", status.name(),
+                "userId", String.valueOf(order.getUserId()),
+                "supervisorId", String.valueOf(supervisorId),
+                "listingId", String.valueOf(order.getListingId()),
+                "orderType", order.getOrderType().name(),
+                "direction", order.getDirection().name()
+        ));
+
+        if (status == OrderStatus.APPROVED) {
+            orderNotificationProducer.sendOrderApproved(payload);
+            return;
+        }
+        orderNotificationProducer.sendOrderDeclined(payload);
     }
 
     private OrderResponse mapToResponse(Order order, BigDecimal approximatePrice, BigDecimal fee) {

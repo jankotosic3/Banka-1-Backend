@@ -12,6 +12,8 @@ import com.banka1.order.dto.CreateSellOrderRequest;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.ExchangeStatusDto;
+import com.banka1.order.dto.OrderNotificationPayload;
+import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
 import com.banka1.order.dto.StockListingDto;
 import com.banka1.order.entity.ActuaryInfo;
@@ -19,8 +21,10 @@ import com.banka1.order.entity.Order;
 import com.banka1.order.entity.Portfolio;
 import com.banka1.order.entity.enums.ListingType;
 import com.banka1.order.entity.enums.OrderDirection;
+import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.rabbitmq.OrderNotificationProducer;
 import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
 import com.banka1.order.repository.PortfolioRepository;
@@ -35,6 +39,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
@@ -67,6 +72,8 @@ class OrderCreationServiceTest {
     private ExchangeClient exchangeClient;
     @Mock
     private OrderExecutionService orderExecutionService;
+    @Mock
+    private OrderNotificationProducer orderNotificationProducer;
 
     @InjectMocks
     private OrderCreationServiceImpl service;
@@ -127,6 +134,9 @@ class OrderCreationServiceTest {
 
         bankAccount = new EmployeeDto();
         bankAccount.setId(999L);
+        bankAccount.setIme("Bank");
+        bankAccount.setPrezime("Account");
+        bankAccount.setEmail("bank@example.com");
         storedOrder = new AtomicReference<>();
 
         ExchangeRateDto usdToRsd = new ExchangeRateDto();
@@ -142,6 +152,7 @@ class OrderCreationServiceTest {
         lenient().when(accountClient.getAccountDetails(999L)).thenReturn(accountDetails);
         lenient().doNothing().when(accountClient).transfer(any(AccountTransactionRequest.class));
         lenient().when(employeeClient.getBankAccount("USD")).thenReturn(bankAccount);
+        lenient().when(employeeClient.getEmployee(2L)).thenReturn(bankAccount);
         lenient().when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
         lenient().when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.empty());
         lenient().when(exchangeClient.calculate("USD", "RSD", new BigDecimal("1010.00"))).thenReturn(usdToRsd);
@@ -236,6 +247,58 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.DECLINED);
         assertThat(response.getApprovedBy()).isEqualTo(77L);
+    }
+
+    @Test
+    void approveOrder_publishesApprovedNotification() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        agent.setNeedApproval(true);
+        agent.setLimit(new BigDecimal("2000.00"));
+        agent.setUsedLimit(BigDecimal.ZERO);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+        EmployeeDto employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Ana");
+        employee.setPrezime("Agent");
+        employee.setEmail("ana.agent@example.com");
+        when(employeeClient.getEmployee(2L)).thenReturn(employee);
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+        service.confirmOrder(actuaryUser, 100L);
+        service.approveOrder(88L, 100L);
+
+        ArgumentCaptor<OrderNotificationPayload> payloadCaptor = ArgumentCaptor.forClass(OrderNotificationPayload.class);
+        verify(orderNotificationProducer).sendOrderApproved(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue().getStatus()).isEqualTo(OrderStatus.APPROVED);
+        assertThat(payloadCaptor.getValue().getSupervisorId()).isEqualTo(88L);
+        assertThat(payloadCaptor.getValue().getUserEmail()).isEqualTo("ana.agent@example.com");
+    }
+
+    @Test
+    void declineOrder_publishesDeclinedNotification() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        agent.setNeedApproval(true);
+        agent.setLimit(new BigDecimal("2000.00"));
+        agent.setUsedLimit(BigDecimal.ZERO);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+        EmployeeDto employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Ana");
+        employee.setPrezime("Agent");
+        employee.setEmail("ana.agent@example.com");
+        when(employeeClient.getEmployee(2L)).thenReturn(employee);
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+        service.confirmOrder(actuaryUser, 100L);
+        service.declineOrder(77L, 100L);
+
+        ArgumentCaptor<OrderNotificationPayload> payloadCaptor = ArgumentCaptor.forClass(OrderNotificationPayload.class);
+        verify(orderNotificationProducer).sendOrderDeclined(payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue().getStatus()).isEqualTo(OrderStatus.DECLINED);
+        assertThat(payloadCaptor.getValue().getSupervisorId()).isEqualTo(77L);
+        assertThat(payloadCaptor.getValue().getUserEmail()).isEqualTo("ana.agent@example.com");
     }
 
     @Test
@@ -379,5 +442,115 @@ class OrderCreationServiceTest {
         assertThatThrownBy(() -> service.confirmOrder(marginClient, 100L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Margin requirements");
+    }
+
+    @Test
+    void getOrders_allReturnsOverviewRowsAndEnrichesActuaryNames() {
+        Order actuaryOrder = new Order();
+        actuaryOrder.setId(10L);
+        actuaryOrder.setUserId(2L);
+        actuaryOrder.setListingId(42L);
+        actuaryOrder.setOrderType(OrderType.MARKET);
+        actuaryOrder.setQuantity(10);
+        actuaryOrder.setContractSize(1);
+        actuaryOrder.setPricePerUnit(new BigDecimal("101.00"));
+        actuaryOrder.setDirection(OrderDirection.BUY);
+        actuaryOrder.setRemainingPortions(6);
+        actuaryOrder.setStatus(OrderStatus.PENDING);
+
+        Order clientOrder = new Order();
+        clientOrder.setId(11L);
+        clientOrder.setUserId(1L);
+        clientOrder.setListingId(42L);
+        clientOrder.setOrderType(OrderType.LIMIT);
+        clientOrder.setQuantity(5);
+        clientOrder.setContractSize(1);
+        clientOrder.setPricePerUnit(new BigDecimal("99.00"));
+        clientOrder.setDirection(OrderDirection.SELL);
+        clientOrder.setRemainingPortions(0);
+        clientOrder.setStatus(OrderStatus.DONE);
+
+        when(orderRepository.findAll()).thenReturn(List.of(actuaryOrder, clientOrder));
+        ActuaryInfo actuaryInfo = new ActuaryInfo();
+        actuaryInfo.setEmployeeId(2L);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(actuaryInfo));
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
+        EmployeeDto employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Ana");
+        employee.setPrezime("Agent");
+        employee.setUsername("aagent");
+        when(employeeClient.getEmployee(2L)).thenReturn(employee);
+
+        List<OrderOverviewResponse> response = service.getOrders(OrderOverviewStatusFilter.ALL);
+
+        assertThat(response).hasSize(2);
+        assertThat(response.get(0).getOrderId()).isEqualTo(10L);
+        assertThat(response.get(0).getAgentName()).isEqualTo("Ana Agent");
+        assertThat(response.get(0).getListingType()).isEqualTo(ListingType.STOCK);
+        assertThat(response.get(0).getRemainingPortions()).isEqualTo(6);
+        assertThat(response.get(1).getAgentName()).isNull();
+        verify(employeeClient).getEmployee(2L);
+    }
+
+    @Test
+    void getOrders_filtersByRequestedStatus() {
+        Order approvedOrder = new Order();
+        approvedOrder.setId(12L);
+        approvedOrder.setUserId(1L);
+        approvedOrder.setListingId(42L);
+        approvedOrder.setOrderType(OrderType.MARKET);
+        approvedOrder.setQuantity(4);
+        approvedOrder.setContractSize(1);
+        approvedOrder.setPricePerUnit(new BigDecimal("100.00"));
+        approvedOrder.setDirection(OrderDirection.BUY);
+        approvedOrder.setRemainingPortions(4);
+        approvedOrder.setStatus(OrderStatus.APPROVED);
+        when(orderRepository.findByStatus(OrderStatus.APPROVED)).thenReturn(List.of(approvedOrder));
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
+
+        List<OrderOverviewResponse> response = service.getOrders(OrderOverviewStatusFilter.APPROVED);
+
+        assertThat(response).hasSize(1);
+        assertThat(response.getFirst().getStatus()).isEqualTo(OrderStatus.APPROVED);
+    }
+
+    @Test
+    void supervisorCancel_preservesRemainingPortionsAndStopsExecution() {
+        Order order = new Order();
+        order.setId(200L);
+        order.setUserId(2L);
+        order.setListingId(42L);
+        order.setOrderType(OrderType.MARKET);
+        order.setQuantity(10);
+        order.setContractSize(1);
+        order.setPricePerUnit(new BigDecimal("101.00"));
+        order.setDirection(OrderDirection.BUY);
+        order.setRemainingPortions(4);
+        order.setStatus(OrderStatus.APPROVED);
+        order.setIsDone(false);
+        order.setAccountId(5L);
+        when(orderRepository.findById(200L)).thenReturn(Optional.of(order));
+
+        OrderResponse response = service.cancelOrder(200L);
+
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(response.getRemainingPortions()).isEqualTo(4);
+        assertThat(response.getIsDone()).isTrue();
+    }
+
+    @Test
+    void supervisorCancel_rejectsTerminalOrders() {
+        Order order = new Order();
+        order.setId(201L);
+        order.setUserId(2L);
+        order.setListingId(42L);
+        order.setStatus(OrderStatus.DONE);
+        order.setIsDone(true);
+        when(orderRepository.findById(201L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancelOrder(201L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no longer be cancelled");
     }
 }

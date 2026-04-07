@@ -3,7 +3,9 @@ package com.banka1.order.controller;
 import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.CreateBuyOrderRequest;
 import com.banka1.order.dto.CreateSellOrderRequest;
+import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
+import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.service.OrderCreationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -56,6 +59,14 @@ public class OrderController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ResponseEntity<List<OrderOverviewResponse>> getOrders(
+            @RequestParam(defaultValue = "ALL") OrderOverviewStatusFilter status
+    ) {
+        return ResponseEntity.ok(orderCreationService.getOrders(status));
+    }
+
     @PostMapping("/{id}/confirm")
     @PreAuthorize("hasRole('CLIENT') or hasRole('ACTUARY')")
     public ResponseEntity<OrderResponse> confirmOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
@@ -68,13 +79,19 @@ public class OrderController {
         return ResponseEntity.ok(orderCreationService.cancelOrder(toAuthenticatedUser(jwt), id));
     }
 
-    @PostMapping("/{id}/approve")
+    @PutMapping("/{id}/cancel")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ResponseEntity<OrderResponse> cancelOrder(@PathVariable Long id) {
+        return ResponseEntity.ok(orderCreationService.cancelOrder(id));
+    }
+
+    @PutMapping("/{id}/approve")
     @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<OrderResponse> approveOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
         return ResponseEntity.ok(orderCreationService.approveOrder(Long.valueOf(jwt.getSubject()), id));
     }
 
-    @PostMapping("/{id}/decline")
+    @PutMapping("/{id}/decline")
     @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<OrderResponse> declineOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
         return ResponseEntity.ok(orderCreationService.declineOrder(Long.valueOf(jwt.getSubject()), id));

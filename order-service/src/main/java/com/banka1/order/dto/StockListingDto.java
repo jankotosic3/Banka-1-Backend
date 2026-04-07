@@ -1,6 +1,7 @@
 package com.banka1.order.dto;
 
 import com.banka1.order.entity.enums.ListingType;
+import com.banka1.order.entity.enums.OptionType;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -35,6 +36,12 @@ public class StockListingDto {
     private Long volume;
     /** Settlement date, when provided by stock-service. */
     private LocalDate settlementDate;
+    /** Optional identifier of the underlying listing for option exercise. */
+    private Long underlyingListingId;
+    /** Optional strike price for option listings. */
+    private BigDecimal strikePrice;
+    /** Optional option type for option listings. */
+    private OptionType optionType;
     /** Optional underlying spot price used for option margin calculation. */
     private BigDecimal underlyingPrice;
     /** Optional maintenance margin coming directly from stock-service. */
