@@ -10,5 +10,6 @@
     <include file="db/changelog/003-create-stock.sql"/>
     <include file="db/changelog/004-create-futures-contract.sql"/>
     <include file="db/changelog/005-create-forex-pair.sql"/>
+    <include file="db/changelog/006-create-stock-option.sql"/>
 
 </databaseChangeLog>
