@@ -43,24 +43,6 @@ public class TaxController {
         this.taxService = taxService;
     }
 
-    /**
-     * Manually triggers monthly capital gains tax calculation.
-     *
-     * <p>
-     * Intended for supervisor usage via portal.
-     * This endpoint calculates tax for all eligible transactions,
-     * performs currency conversion to RSD, and initiates transfers
-     * from user accounts to the state account.
-     *
-     * @return HTTP 200 if successfully triggered
-     */
-    @PostMapping("/api/tax/capital-gains/run")
-    @PreAuthorize("hasRole('SUPERVISOR')")
-    public ResponseEntity<Void> runTaxCalculation() {
-        taxService.collectMonthlyTaxManually();
-        return ResponseEntity.ok().build();
-    }
-
     @PostMapping("/api/tax/collect")
     @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<Void> collectTax() {

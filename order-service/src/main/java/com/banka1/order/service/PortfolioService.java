@@ -48,7 +48,8 @@ public interface PortfolioService {
 
     /**
      * Executes an option contract for the given portfolio position.
-     * Can only be performed by users with the ACTUARY role.
+     * Can only be performed by users with the AGENT security role
+     * (called "actuary" in business-facing responses).
      *
      * Preconditions:
      * - settlement date must not have passed

@@ -20,7 +20,7 @@ import java.util.Set;
 
 /**
  * REST controller exposing portfolio-related endpoints.
- * Allows clients and actuaries to view and manage their portfolio positions.
+ * Allows clients and agent-role employees (actuaries in business terminology) to view and manage their portfolio positions.
  */
 @RestController
 @RequestMapping("/api/portfolio")
@@ -39,7 +39,7 @@ PortfolioController {
      * @return list of portfolio positions with detailed information
      */
     @GetMapping
-    @PreAuthorize("hasAnyRole('CLIENT','ACTUARY','AGENT')")
+    @PreAuthorize("hasAnyRole('CLIENT','AGENT')")
     public ResponseEntity<PortfolioSummaryResponse> getPortfolio(
             @AuthenticationPrincipal Jwt jwt
     ) {
@@ -55,7 +55,7 @@ PortfolioController {
      * @return 200 OK on success
      */
     @PutMapping("/{id}/set-public")
-    @PreAuthorize("hasAnyRole('CLIENT','ACTUARY','AGENT')")
+    @PreAuthorize("hasAnyRole('CLIENT','AGENT')")
     public ResponseEntity<Void> setPublicQuantity(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long id,
@@ -79,7 +79,7 @@ PortfolioController {
      * @return 200 OK on successful execution
      */
     @PostMapping("/{id}/exercise-option")
-    @PreAuthorize("hasAnyRole('ACTUARY','AGENT')")
+    @PreAuthorize("hasRole('AGENT')")
     public ResponseEntity<Void> exerciseOption(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long id

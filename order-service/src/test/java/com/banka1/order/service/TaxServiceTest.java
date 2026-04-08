@@ -38,6 +38,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -123,6 +124,27 @@ class TaxServiceTest {
         stockListing.setListingType(ListingType.STOCK);
         stockListing.setTicker("AAPL");
 
+        lenient().when(orderRepository.findByDirection(OrderDirection.SELL)).thenReturn(List.of(sellOrder));
+        lenient().when(orderRepository.findByUserIdAndDirection(5L, OrderDirection.SELL)).thenReturn(List.of(sellOrder));
+        lenient().when(orderRepository.findByUserId(5L)).thenReturn(List.of(buyOrder, sellOrder));
+        lenient().when(orderRepository.findByUserIdIn(any())).thenAnswer(invocation -> {
+            Collection<Long> userIds = invocation.getArgument(0);
+            return userIds != null && userIds.contains(5L) ? List.of(buyOrder, sellOrder) : List.of();
+        });
+        lenient().when(transactionRepository.findByOrderIdInAndTimestampBetween(any(), any(), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsAndRange(
+                        List.of(buyTx, sellTx),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2)
+                ));
+        lenient().when(transactionRepository.findByOrderIdInAndTimestampBefore(any(), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsBefore(
+                        List.of(buyTx, sellTx),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1)
+                ));
+
         Map<String, TaxCharge> persistedCharges = new HashMap<>();
         lenient().when(taxChargeRepository.existsBySellTransactionIdAndBuyTransactionId(anyLong(), anyLong()))
                 .thenAnswer(invocation -> persistedCharges.containsKey(invocation.getArgument(0) + ":" + invocation.getArgument(1)));
@@ -153,9 +175,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTax_chargesFifteenPercentForStockSellFromOriginalBuyAccountToGovernmentRsdAccount() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -185,6 +206,9 @@ class TaxServiceTest {
         verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("37.50"));
         verify(exchangeClient, never()).calculate("USD", "RSD", new BigDecimal("37.50"));
         verify(notificationProducer).sendTaxCollected(any());
+        verify(transactionRepository, never()).findByTimestampBetween(any(), any());
+        verify(transactionRepository).findByOrderIdInAndTimestampBetween(eq(List.of(11L)), any(), any());
+        verify(transactionRepository).findByOrderIdInAndTimestampBefore(eq(List.of(10L, 11L)), any());
     }
 
     @Test
@@ -193,9 +217,8 @@ class TaxServiceTest {
         forexListing.setId(100L);
         forexListing.setListingType(ListingType.FOREX);
 
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(forexListing);
 
         taxService.collectMonthlyTax();
@@ -221,10 +244,16 @@ class TaxServiceTest {
         laterBuyOrder.setAccountId(77L);
         laterBuyOrder.setDirection(OrderDirection.BUY);
 
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(laterBuyTx, sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
-        when(orderRepository.findById(12L)).thenReturn(Optional.of(laterBuyOrder));
+        when(orderRepository.findByUserId(5L)).thenReturn(List.of(buyOrder, sellOrder, laterBuyOrder));
+        when(transactionRepository.findByOrderIdInAndTimestampBefore(eq(List.of(10L, 11L, 12L)), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsBefore(
+                        List.of(buyTx, sellTx, laterBuyTx),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1)
+                ));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(12L)).thenReturn(Optional.of(laterBuyOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -253,9 +282,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTaxManually_shouldDelegateToCollectMonthlyTax() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -282,9 +310,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTax_isIdempotentAcrossRepeatedRuns() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -313,9 +340,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTaxManually_doesNotDoubleChargeAfterScheduledRun() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -343,9 +369,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTax_doesNotDoubleChargeWhenNotificationFailsAfterSuccessfulDebit() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -380,9 +405,8 @@ class TaxServiceTest {
 
     @Test
     void collectMonthlyTax_retriesSafelyWhenFailureHappensBeforeDebit() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         when(accountClient.getAccountDetailsById(21L))
@@ -415,9 +439,8 @@ class TaxServiceTest {
 
     @Test
     void getUserDebt_shouldCalculateHistoricalStockTaxOnly() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         TaxDebtResponse response = taxService.getUserDebt(5L);
@@ -428,9 +451,8 @@ class TaxServiceTest {
 
     @Test
     void getAllDebts_shouldAggregateHistoricalStockTaxOnly() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         List<TaxDebtResponse> result = taxService.getAllDebts();
@@ -443,10 +465,10 @@ class TaxServiceTest {
     @Test
     void shouldIgnoreBuyOrders() {
         sellOrder.setDirection(OrderDirection.BUY);
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
-        when(stockClient.getListing(100L)).thenReturn(stockListing);
+        lenient().when(orderRepository.findByDirection(OrderDirection.SELL)).thenReturn(List.of());
+        when(orderRepository.findByUserIdAndDirection(5L, OrderDirection.SELL)).thenReturn(List.of());
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
 
         TaxDebtResponse response = taxService.getUserDebt(5L);
 
@@ -455,9 +477,8 @@ class TaxServiceTest {
 
     @Test
     void getCurrentYearPaidTax_shouldSumTaxBeforeCurrentMonth() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         BigDecimal paidTax = taxService.getCurrentYearPaidTax(5L);
@@ -468,9 +489,8 @@ class TaxServiceTest {
     @Test
     void getCurrentMonthUnpaidTax_shouldSumCurrentMonthTax() {
         sellTx.setTimestamp(LocalDate.now().atStartOfDay());
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         BigDecimal unpaidTax = taxService.getCurrentMonthUnpaidTax(5L);
@@ -494,10 +514,16 @@ class TaxServiceTest {
         expensiveBuyOrder.setAccountId(55L);
         expensiveBuyOrder.setDirection(OrderDirection.BUY);
 
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(expensiveBuyTx, sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
-        when(orderRepository.findById(12L)).thenReturn(Optional.of(expensiveBuyOrder));
+        when(orderRepository.findByUserId(5L)).thenReturn(List.of(buyOrder, sellOrder, expensiveBuyOrder));
+        when(transactionRepository.findByOrderIdInAndTimestampBefore(eq(List.of(10L, 11L, 12L)), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsBefore(
+                        List.of(expensiveBuyTx, sellTx, buyTx),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1)
+                ));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(12L)).thenReturn(Optional.of(expensiveBuyOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         BigDecimal paidTax = taxService.getCurrentYearPaidTax(5L);
@@ -539,9 +565,23 @@ class TaxServiceTest {
         secondStock.setId(200L);
         secondStock.setListingType(ListingType.STOCK);
 
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(currentMonthSell, olderBuy));
-        when(orderRepository.findById(13L)).thenReturn(Optional.of(currentMonthSellOrder));
-        when(orderRepository.findById(14L)).thenReturn(Optional.of(olderBuyOrder));
+        when(orderRepository.findByUserIdAndDirection(5L, OrderDirection.SELL)).thenReturn(List.of(currentMonthSellOrder));
+        when(orderRepository.findByUserId(5L)).thenReturn(List.of(currentMonthSellOrder, olderBuyOrder));
+        when(transactionRepository.findByOrderIdInAndTimestampBetween(eq(List.of(13L)), any(), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsAndRange(
+                        List.of(currentMonthSell),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2)
+                ));
+        when(transactionRepository.findByOrderIdInAndTimestampBefore(eq(List.of(13L, 14L)), any()))
+                .thenAnswer(invocation -> filterTransactionsByOrderIdsBefore(
+                        List.of(currentMonthSell, olderBuy),
+                        invocation.getArgument(0),
+                        invocation.getArgument(1)
+                ));
+        lenient().when(orderRepository.findById(13L)).thenReturn(Optional.of(currentMonthSellOrder));
+        lenient().when(orderRepository.findById(14L)).thenReturn(Optional.of(olderBuyOrder));
         when(stockClient.getListing(200L)).thenReturn(secondStock);
 
         BigDecimal unpaidTax = taxService.getCurrentMonthUnpaidTax(5L);
@@ -551,9 +591,8 @@ class TaxServiceTest {
 
     @Test
     void getTaxTracking_returnsClientAndActuaryRowsWithDebtInRsd() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -601,6 +640,7 @@ class TaxServiceTest {
         verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("37.50"));
         verify(clientClient).searchCustomers(null, null, 0, 100);
         verify(employeeClient).searchEmployees(null, null, null, null, 0, 100);
+        verify(transactionRepository, never()).findByTimestampBetween(any(), any());
     }
 
     @Test
@@ -629,7 +669,7 @@ class TaxServiceTest {
 
     @Test
     void getTaxTracking_fetchesAllPagesInsteadOfOnlyFirst200Users() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of());
+        when(orderRepository.findByDirection(OrderDirection.SELL)).thenReturn(List.of());
 
         CustomerDto customerPage0 = new CustomerDto();
         customerPage0.setId(1L);
@@ -683,9 +723,8 @@ class TaxServiceTest {
 
     @Test
     void getTaxTracking_failsInsteadOfReturningNonRsdAmountWhenConversionFails() {
-        when(transactionRepository.findByTimestampBetween(any(), any())).thenReturn(List.of(sellTx, buyTx));
-        when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
-        when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
+        lenient().when(orderRepository.findById(10L)).thenReturn(Optional.of(buyOrder));
+        lenient().when(orderRepository.findById(11L)).thenReturn(Optional.of(sellOrder));
         when(stockClient.getListing(100L)).thenReturn(stockListing);
 
         AccountDetailsDto buyAccount = new AccountDetailsDto();
@@ -700,5 +739,35 @@ class TaxServiceTest {
                 .hasMessageContaining("Failed to convert tax tracking debt to RSD");
 
         verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("37.50"));
+    }
+
+    private List<Transaction> filterTransactionsByOrderIdsAndRange(
+            List<Transaction> source,
+            Collection<Long> orderIds,
+            LocalDateTime start,
+            LocalDateTime end
+    ) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return List.of();
+        }
+        return source.stream()
+                .filter(transaction -> orderIds.contains(transaction.getOrderId()))
+                .filter(transaction -> !transaction.getTimestamp().isBefore(start))
+                .filter(transaction -> transaction.getTimestamp().isBefore(end))
+                .toList();
+    }
+
+    private List<Transaction> filterTransactionsByOrderIdsBefore(
+            List<Transaction> source,
+            Collection<Long> orderIds,
+            LocalDateTime end
+    ) {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return List.of();
+        }
+        return source.stream()
+                .filter(transaction -> orderIds.contains(transaction.getOrderId()))
+                .filter(transaction -> transaction.getTimestamp().isBefore(end))
+                .toList();
     }
 }

@@ -46,6 +46,9 @@ public class PortfolioResponse {
     /** Current market price fetched from stock-service. */
     private BigDecimal currentPrice;
 
+    /** Average acquisition price stored on the portfolio position. */
+    private BigDecimal averagePurchasePrice;
+
     /** Unrealized or realized profit for this position. */
     private BigDecimal profit;
 

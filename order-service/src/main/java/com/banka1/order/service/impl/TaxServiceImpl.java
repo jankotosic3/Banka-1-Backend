@@ -39,8 +39,10 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -239,9 +241,18 @@ public class TaxServiceImpl implements TaxService {
     }
 
     private List<TaxChargeEntry> buildTaxChargeEntries(LocalDateTime start, LocalDateTime end, Long userIdFilter) {
-        List<Transaction> transactions = new ArrayList<>(transactionRepository.findByTimestampBetween(HISTORY_START, end));
         Map<Long, Order> orderCache = new HashMap<>();
         Map<Long, Boolean> stockListingCache = new HashMap<>();
+        List<Transaction> relevantSellTransactions = loadRelevantSellTransactions(start, end, userIdFilter, orderCache, stockListingCache);
+        if (relevantSellTransactions.isEmpty()) {
+            return List.of();
+        }
+
+        List<Transaction> transactions = loadHistoricalTransactionsForRelevantKeys(end, relevantSellTransactions, orderCache, stockListingCache);
+        if (transactions.isEmpty()) {
+            return List.of();
+        }
+
         Map<UserListingKey, Deque<BuyLot>> buyLots = new HashMap<>();
         List<TaxChargeEntry> charges = new ArrayList<>();
 
@@ -284,6 +295,81 @@ public class TaxServiceImpl implements TaxService {
         }
 
         return charges;
+    }
+
+    private List<Transaction> loadRelevantSellTransactions(
+            LocalDateTime start,
+            LocalDateTime end,
+            Long userIdFilter,
+            Map<Long, Order> orderCache,
+            Map<Long, Boolean> stockListingCache
+    ) {
+        List<Order> sellOrders = userIdFilter == null
+                ? orderRepository.findByDirection(OrderDirection.SELL)
+                : orderRepository.findByUserIdAndDirection(userIdFilter, OrderDirection.SELL);
+        if (sellOrders.isEmpty()) {
+            return List.of();
+        }
+
+        sellOrders.forEach(order -> orderCache.put(order.getId(), order));
+        List<Long> sellOrderIds = sellOrders.stream()
+                .map(Order::getId)
+                .toList();
+
+        return transactionRepository.findByOrderIdInAndTimestampBetween(sellOrderIds, start, end).stream()
+                .filter(tx -> {
+                    Order order = resolveOrder(orderCache, tx.getOrderId());
+                    return order != null && isStockOrder(order, stockListingCache);
+                })
+                .toList();
+    }
+
+    private List<Transaction> loadHistoricalTransactionsForRelevantKeys(
+            LocalDateTime end,
+            List<Transaction> relevantSellTransactions,
+            Map<Long, Order> orderCache,
+            Map<Long, Boolean> stockListingCache
+    ) {
+        Map<Long, Set<Long>> listingsByUser = new HashMap<>();
+        Set<Long> relevantUserIds = new HashSet<>();
+
+        for (Transaction sellTransaction : relevantSellTransactions) {
+            Order sellOrder = resolveOrder(orderCache, sellTransaction.getOrderId());
+            if (sellOrder == null || sellOrder.getUserId() == null || sellOrder.getListingId() == null) {
+                continue;
+            }
+            relevantUserIds.add(sellOrder.getUserId());
+            listingsByUser.computeIfAbsent(sellOrder.getUserId(), ignored -> new HashSet<>())
+                    .add(sellOrder.getListingId());
+        }
+
+        if (relevantUserIds.isEmpty()) {
+            return List.of();
+        }
+
+        List<Order> candidateOrders = relevantUserIds.size() == 1
+                ? orderRepository.findByUserId(relevantUserIds.iterator().next())
+                : orderRepository.findByUserIdIn(relevantUserIds);
+        candidateOrders.forEach(order -> orderCache.put(order.getId(), order));
+
+        List<Long> orderIds = candidateOrders.stream()
+                .filter(order -> belongsToRelevantTaxScope(order, listingsByUser))
+                .filter(order -> isStockOrder(order, stockListingCache))
+                .map(Order::getId)
+                .toList();
+        if (orderIds.isEmpty()) {
+            return List.of();
+        }
+
+        return new ArrayList<>(transactionRepository.findByOrderIdInAndTimestampBefore(orderIds, end));
+    }
+
+    private boolean belongsToRelevantTaxScope(Order order, Map<Long, Set<Long>> listingsByUser) {
+        if (order == null || order.getUserId() == null || order.getListingId() == null) {
+            return false;
+        }
+        Set<Long> listingIds = listingsByUser.get(order.getUserId());
+        return listingIds != null && listingIds.contains(order.getListingId());
     }
 
     private void allocateSellTaxLots(List<TaxChargeEntry> charges, Deque<BuyLot> lots, Order sellOrder,

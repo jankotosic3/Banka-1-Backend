@@ -6,6 +6,7 @@ import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.AuthenticatedUser;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.PortfolioSummaryResponse;
@@ -15,6 +16,9 @@ import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.entity.Portfolio;
 import com.banka1.order.entity.enums.ListingType;
 import com.banka1.order.entity.enums.OptionType;
+import com.banka1.order.exception.BadRequestException;
+import com.banka1.order.exception.BusinessConflictException;
+import com.banka1.order.exception.ForbiddenOperationException;
 import com.banka1.order.repository.PortfolioRepository;
 import com.banka1.order.service.impl.PortfolioServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -117,8 +121,10 @@ class PortfolioServiceTest {
 
         assertThat(result.getHoldings()).hasSize(2);
         assertThat(result.getHoldings().get(0).getTicker()).isEqualTo("AAPL");
+        assertThat(result.getHoldings().get(0).getAveragePurchasePrice()).isEqualByComparingTo("100");
         assertThat(result.getHoldings().get(0).getProfit()).isEqualByComparingTo("500");
         assertThat(result.getHoldings().get(0).getPublicQuantity()).isEqualTo(2);
+        assertThat(result.getHoldings().get(1).getAveragePurchasePrice()).isEqualByComparingTo("12");
         assertThat(result.getHoldings().get(1).getExercisable()).isTrue();
         assertThat(result.getTotalProfit()).isEqualByComparingTo("876");
         assertThat(result.getYearlyTaxPaid()).isEqualByComparingTo("15.00");
@@ -146,7 +152,7 @@ class PortfolioServiceTest {
         request.setPublicQuantity(-1);
 
         assertThatThrownBy(() -> portfolioService.setPublicQuantity(clientUser, 1L, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("negative");
     }
 
@@ -157,7 +163,7 @@ class PortfolioServiceTest {
         request.setPublicQuantity(11);
 
         assertThatThrownBy(() -> portfolioService.setPublicQuantity(clientUser, 1L, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("exceed");
     }
 
@@ -168,7 +174,7 @@ class PortfolioServiceTest {
         request.setPublicQuantity(1);
 
         assertThatThrownBy(() -> portfolioService.setPublicQuantity(clientUser, 2L, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Only STOCK");
 
         Portfolio foreignPortfolio = new Portfolio();
@@ -180,7 +186,7 @@ class PortfolioServiceTest {
         when(portfolioRepository.findById(3L)).thenReturn(Optional.of(foreignPortfolio));
 
         assertThatThrownBy(() -> portfolioService.setPublicQuantity(clientUser, 3L, request))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ForbiddenOperationException.class)
                 .hasMessageContaining("authenticated user");
     }
 
@@ -188,20 +194,20 @@ class PortfolioServiceTest {
     void exerciseOption_rejectsNonOptionExpiredAndNotInMoney() {
         when(portfolioRepository.findById(1L)).thenReturn(Optional.of(stockPortfolio));
         assertThatThrownBy(() -> portfolioService.exerciseOption(actuaryUser, 1L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Only OPTION");
 
         when(portfolioRepository.findById(2L)).thenReturn(Optional.of(optionPortfolio));
         StockListingDto expired = optionListing(LocalDate.now().minusDays(1), OptionType.CALL, new BigDecimal("150"), 300L);
         when(stockClient.getListing(200L)).thenReturn(expired);
         assertThatThrownBy(() -> portfolioService.exerciseOption(actuaryUser, 2L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("expired");
 
         StockListingDto notInMoney = optionListing(LocalDate.now().plusDays(1), OptionType.CALL, new BigDecimal("0.50"), 300L);
         when(stockClient.getListing(200L)).thenReturn(notInMoney);
         assertThatThrownBy(() -> portfolioService.exerciseOption(actuaryUser, 2L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("in-the-money");
     }
 
@@ -216,11 +222,20 @@ class PortfolioServiceTest {
         when(portfolioRepository.findById(4L)).thenReturn(Optional.of(foreignOption));
 
         assertThatThrownBy(() -> portfolioService.exerciseOption(actuaryUser, 4L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ForbiddenOperationException.class)
                 .hasMessageContaining("authenticated user");
 
         assertThatThrownBy(() -> portfolioService.exerciseOption(clientUser, 2L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ForbiddenOperationException.class)
+                .hasMessageContaining("actuaries");
+    }
+
+    @Test
+    void exerciseOption_rejectsLegacyActuaryAliasWithoutAgentRole() {
+        AuthenticatedUser legacyActuaryAlias = new AuthenticatedUser(1L, Set.of("ACTUARY"), Set.of());
+
+        assertThatThrownBy(() -> portfolioService.exerciseOption(legacyActuaryAlias, 2L))
+                .isInstanceOf(ForbiddenOperationException.class)
                 .hasMessageContaining("actuaries");
     }
 
@@ -236,8 +251,8 @@ class PortfolioServiceTest {
         when(stockClient.getListing(300L)).thenReturn(underlying);
         when(portfolioRepository.findByUserIdAndListingId(1L, 300L)).thenReturn(Optional.empty());
 
-        EmployeeDto bankAccount = new EmployeeDto();
-        bankAccount.setId(999L);
+        BankAccountDto bankAccount = new BankAccountDto();
+        bankAccount.setAccountId(999L);
         when(employeeClient.getBankAccount("USD")).thenReturn(bankAccount);
 
         AccountDetailsDto bankDetails = new AccountDetailsDto();
@@ -290,8 +305,8 @@ class PortfolioServiceTest {
         underlyingHolding.setAveragePurchasePrice(new BigDecimal("20.00"));
         when(portfolioRepository.findByUserIdAndListingId(1L, 300L)).thenReturn(Optional.of(underlyingHolding));
 
-        EmployeeDto bankAccount = new EmployeeDto();
-        bankAccount.setId(999L);
+        BankAccountDto bankAccount = new BankAccountDto();
+        bankAccount.setAccountId(999L);
         when(employeeClient.getBankAccount("USD")).thenReturn(bankAccount);
 
         AccountDetailsDto bankDetails = new AccountDetailsDto();
@@ -332,7 +347,7 @@ class PortfolioServiceTest {
         when(portfolioRepository.findByUserIdAndListingId(1L, 300L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> portfolioService.exerciseOption(actuaryUser, 2L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("underlying stock quantity");
         verify(accountClient, never()).transaction(org.mockito.ArgumentMatchers.any(PaymentDto.class));
     }

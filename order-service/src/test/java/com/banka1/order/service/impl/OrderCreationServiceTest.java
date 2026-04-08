@@ -7,6 +7,7 @@ import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.AuthenticatedUser;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.CreateBuyOrderRequest;
 import com.banka1.order.dto.CreateSellOrderRequest;
 import com.banka1.order.dto.EmployeeDto;
@@ -24,6 +25,8 @@ import com.banka1.order.entity.enums.OrderDirection;
 import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.exception.BusinessConflictException;
+import com.banka1.order.exception.ResourceNotFoundException;
 import com.banka1.order.rabbitmq.OrderNotificationProducer;
 import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
@@ -50,6 +53,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -86,14 +90,15 @@ class OrderCreationServiceTest {
     private StockListingDto listing;
     private ExchangeStatusDto exchangeStatus;
     private AccountDetailsDto accountDetails;
-    private EmployeeDto bankAccount;
+    private BankAccountDto bankAccount;
+    private EmployeeDto employee;
     private AtomicReference<Order> storedOrder;
 
     @BeforeEach
     void setUp() {
         clientUser = new AuthenticatedUser(1L, Set.of("CLIENT"), Set.of());
         marginClient = new AuthenticatedUser(1L, Set.of("CLIENT"), Set.of("MARGIN_TRADING"));
-        actuaryUser = new AuthenticatedUser(2L, Set.of("ACTUARY"), Set.of("MARGIN_TRADING"));
+        actuaryUser = new AuthenticatedUser(2L, Set.of("AGENT"), Set.of("MARGIN_TRADING"));
 
         buyRequest = new CreateBuyOrderRequest();
         buyRequest.setListingId(42L);
@@ -132,11 +137,13 @@ class OrderCreationServiceTest {
         accountDetails.setOwnerId(1L);
         accountDetails.setAvailableCredit(new BigDecimal("1000.00"));
 
-        bankAccount = new EmployeeDto();
-        bankAccount.setId(999L);
-        bankAccount.setIme("Bank");
-        bankAccount.setPrezime("Account");
-        bankAccount.setEmail("bank@example.com");
+        bankAccount = new BankAccountDto();
+        bankAccount.setAccountId(999L);
+        employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Bank");
+        employee.setPrezime("Account");
+        employee.setEmail("bank@example.com");
         storedOrder = new AtomicReference<>();
 
         ExchangeRateDto usdToRsd = new ExchangeRateDto();
@@ -152,7 +159,7 @@ class OrderCreationServiceTest {
         lenient().when(accountClient.getAccountDetails(999L)).thenReturn(accountDetails);
         lenient().doNothing().when(accountClient).transfer(any(AccountTransactionRequest.class));
         lenient().when(employeeClient.getBankAccount("USD")).thenReturn(bankAccount);
-        lenient().when(employeeClient.getEmployee(2L)).thenReturn(bankAccount);
+        lenient().when(employeeClient.getEmployee(2L)).thenReturn(employee);
         lenient().when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
         lenient().when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.empty());
         lenient().when(exchangeClient.calculate("USD", "RSD", new BigDecimal("1010.00"))).thenReturn(usdToRsd);
@@ -167,6 +174,7 @@ class OrderCreationServiceTest {
             return order;
         });
         lenient().when(orderRepository.findById(100L)).thenAnswer(invocation -> Optional.ofNullable(storedOrder.get()));
+        lenient().when(orderRepository.findByIdForUpdate(100L)).thenAnswer(invocation -> Optional.ofNullable(storedOrder.get()));
     }
 
     @Test
@@ -209,11 +217,29 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
         assertThat(response.getApprovedBy()).isNull();
+        verify(accountClient).getAccountDetails(5L);
+        verify(employeeClient, never()).getBankAccount("USD");
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
         verify(orderExecutionService, never()).executeOrderAsync(any());
     }
 
     @Test
-    void approveOrder_updatesApprovedByAndStartsExecution() {
+    void confirmBuyOrder_forAgentFailsWhenSelectedFundingAccountLacksFunds() {
+        accountDetails.setBalance(BigDecimal.ONE);
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+
+        assertThatThrownBy(() -> service.confirmOrder(actuaryUser, 100L))
+                .isInstanceOf(BusinessConflictException.class)
+                .hasMessageContaining("Insufficient funds");
+        verify(accountClient).getAccountDetails(5L);
+        verify(employeeClient, never()).getBankAccount("USD");
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(orderExecutionService, never()).executeOrderAsync(any());
+    }
+
+    @Test
+    void approveOrder_updatesApprovedByChargesFeeAndStartsExecution() {
         ActuaryInfo agent = new ActuaryInfo();
         agent.setEmployeeId(2L);
         agent.setNeedApproval(true);
@@ -228,11 +254,32 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.APPROVED);
         assertThat(response.getApprovedBy()).isEqualTo(88L);
+        verify(accountClient).transfer(any(AccountTransactionRequest.class));
         verify(orderExecutionService).executeOrderAsync(100L);
     }
 
     @Test
-    void declineOrder_marksPendingAgentOrderDeclined() {
+    void approveOrder_rejectsExpiredPendingOrderWithBusinessConflict() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        agent.setNeedApproval(true);
+        agent.setLimit(new BigDecimal("2000.00"));
+        agent.setUsedLimit(BigDecimal.ZERO);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+        service.confirmOrder(actuaryUser, 100L);
+        listing.setSettlementDate(LocalDate.now().minusDays(1));
+
+        assertThatThrownBy(() -> service.approveOrder(88L, 100L))
+                .isInstanceOf(BusinessConflictException.class)
+                .hasMessageContaining("past settlement date can only be declined");
+        assertThat(storedOrder.get().getStatus()).isEqualTo(OrderStatus.PENDING);
+        verify(orderExecutionService, never()).executeOrderAsync(any());
+    }
+
+    @Test
+    void declineOrder_marksPendingAgentOrderDeclinedWithoutChargingFee() {
         ActuaryInfo agent = new ActuaryInfo();
         agent.setEmployeeId(2L);
         agent.setNeedApproval(true);
@@ -247,6 +294,23 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.DECLINED);
         assertThat(response.getApprovedBy()).isEqualTo(77L);
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+    }
+
+    @Test
+    void approveOrder_chargesFeeExactlyOnceAfterPendingConfirmation() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        agent.setNeedApproval(true);
+        agent.setLimit(new BigDecimal("2000.00"));
+        agent.setUsedLimit(BigDecimal.ZERO);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+        service.confirmOrder(actuaryUser, 100L);
+        service.approveOrder(88L, 100L);
+
+        verify(accountClient, times(1)).transfer(any(AccountTransactionRequest.class));
     }
 
     @Test
@@ -319,7 +383,7 @@ class OrderCreationServiceTest {
         service.createBuyOrder(clientUser, buyRequest);
 
         assertThatThrownBy(() -> service.confirmOrder(clientUser, 100L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("margin permission");
     }
 
@@ -368,7 +432,7 @@ class OrderCreationServiceTest {
         when(portfolioRepository.findByUserIdAndListingId(1L, 42L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.createSellOrder(clientUser, sellRequest))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Portfolio position not found");
     }
 
@@ -385,7 +449,7 @@ class OrderCreationServiceTest {
         service.createSellOrder(clientUser, sellRequest);
 
         assertThatThrownBy(() -> service.confirmOrder(clientUser, 100L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("margin permission");
     }
 
@@ -440,7 +504,7 @@ class OrderCreationServiceTest {
         service.createSellOrder(marginClient, sellRequest);
 
         assertThatThrownBy(() -> service.confirmOrder(marginClient, 100L))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("Margin requirements");
     }
 
@@ -473,8 +537,7 @@ class OrderCreationServiceTest {
         when(orderRepository.findAll()).thenReturn(List.of(actuaryOrder, clientOrder));
         ActuaryInfo actuaryInfo = new ActuaryInfo();
         actuaryInfo.setEmployeeId(2L);
-        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(actuaryInfo));
-        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
+        when(actuaryInfoRepository.findByEmployeeIdIn(java.util.Set.of(1L, 2L))).thenReturn(List.of(actuaryInfo));
         EmployeeDto employee = new EmployeeDto();
         employee.setId(2L);
         employee.setIme("Ana");
@@ -491,6 +554,7 @@ class OrderCreationServiceTest {
         assertThat(response.get(0).getRemainingPortions()).isEqualTo(6);
         assertThat(response.get(1).getAgentName()).isNull();
         verify(employeeClient).getEmployee(2L);
+        verify(stockClient, times(1)).getListing(42L);
     }
 
     @Test
@@ -507,12 +571,57 @@ class OrderCreationServiceTest {
         approvedOrder.setRemainingPortions(4);
         approvedOrder.setStatus(OrderStatus.APPROVED);
         when(orderRepository.findByStatus(OrderStatus.APPROVED)).thenReturn(List.of(approvedOrder));
-        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
+        when(actuaryInfoRepository.findByEmployeeIdIn(java.util.Set.of(1L))).thenReturn(List.of());
 
         List<OrderOverviewResponse> response = service.getOrders(OrderOverviewStatusFilter.APPROVED);
 
         assertThat(response).hasSize(1);
         assertThat(response.getFirst().getStatus()).isEqualTo(OrderStatus.APPROVED);
+    }
+
+    @Test
+    void getOrders_deduplicatesListingAndEmployeeLookupsWithinRequest() {
+        Order first = new Order();
+        first.setId(301L);
+        first.setUserId(2L);
+        first.setListingId(42L);
+        first.setOrderType(OrderType.MARKET);
+        first.setQuantity(1);
+        first.setContractSize(1);
+        first.setPricePerUnit(new BigDecimal("100.00"));
+        first.setDirection(OrderDirection.BUY);
+        first.setRemainingPortions(1);
+        first.setStatus(OrderStatus.PENDING);
+
+        Order second = new Order();
+        second.setId(302L);
+        second.setUserId(2L);
+        second.setListingId(42L);
+        second.setOrderType(OrderType.LIMIT);
+        second.setQuantity(2);
+        second.setContractSize(1);
+        second.setPricePerUnit(new BigDecimal("101.00"));
+        second.setDirection(OrderDirection.SELL);
+        second.setRemainingPortions(2);
+        second.setStatus(OrderStatus.APPROVED);
+
+        ActuaryInfo actuaryInfo = new ActuaryInfo();
+        actuaryInfo.setEmployeeId(2L);
+        EmployeeDto employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Ana");
+        employee.setPrezime("Agent");
+        employee.setUsername("aagent");
+
+        when(orderRepository.findAll()).thenReturn(List.of(first, second));
+        when(actuaryInfoRepository.findByEmployeeIdIn(java.util.Set.of(2L))).thenReturn(List.of(actuaryInfo));
+        when(employeeClient.getEmployee(2L)).thenReturn(employee);
+
+        List<OrderOverviewResponse> response = service.getOrders(OrderOverviewStatusFilter.ALL);
+
+        assertThat(response).hasSize(2);
+        verify(stockClient, times(1)).getListing(42L);
+        verify(employeeClient, times(1)).getEmployee(2L);
     }
 
     @Test
@@ -530,7 +639,7 @@ class OrderCreationServiceTest {
         order.setStatus(OrderStatus.APPROVED);
         order.setIsDone(false);
         order.setAccountId(5L);
-        when(orderRepository.findById(200L)).thenReturn(Optional.of(order));
+        when(orderRepository.findByIdForUpdate(200L)).thenReturn(Optional.of(order));
 
         OrderResponse response = service.cancelOrder(200L);
 
@@ -547,10 +656,75 @@ class OrderCreationServiceTest {
         order.setListingId(42L);
         order.setStatus(OrderStatus.DONE);
         order.setIsDone(true);
-        when(orderRepository.findById(201L)).thenReturn(Optional.of(order));
+        when(orderRepository.findByIdForUpdate(201L)).thenReturn(Optional.of(order));
 
         assertThatThrownBy(() -> service.cancelOrder(201L))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(BusinessConflictException.class)
                 .hasMessageContaining("no longer be cancelled");
+    }
+
+    @Test
+    void autoDeclineExpiredPendingOrders_declinesOnlyExpiredPendingOrders() {
+        Order expiredPending = new Order();
+        expiredPending.setId(201L);
+        expiredPending.setUserId(2L);
+        expiredPending.setListingId(42L);
+        expiredPending.setOrderType(OrderType.MARKET);
+        expiredPending.setDirection(OrderDirection.BUY);
+        expiredPending.setQuantity(10);
+        expiredPending.setContractSize(1);
+        expiredPending.setPricePerUnit(new BigDecimal("101.00"));
+        expiredPending.setRemainingPortions(10);
+        expiredPending.setStatus(OrderStatus.PENDING);
+        expiredPending.setAccountId(5L);
+
+        Order activePending = new Order();
+        activePending.setId(202L);
+        activePending.setUserId(2L);
+        activePending.setListingId(43L);
+        activePending.setOrderType(OrderType.MARKET);
+        activePending.setDirection(OrderDirection.BUY);
+        activePending.setQuantity(10);
+        activePending.setContractSize(1);
+        activePending.setPricePerUnit(new BigDecimal("101.00"));
+        activePending.setRemainingPortions(10);
+        activePending.setStatus(OrderStatus.PENDING);
+        activePending.setAccountId(5L);
+
+        Order approvedOrder = new Order();
+        approvedOrder.setId(203L);
+        approvedOrder.setUserId(2L);
+        approvedOrder.setListingId(44L);
+        approvedOrder.setStatus(OrderStatus.APPROVED);
+
+        StockListingDto expiredListing = new StockListingDto();
+        expiredListing.setId(42L);
+        expiredListing.setSettlementDate(LocalDate.now().minusDays(1));
+
+        StockListingDto activeListing = new StockListingDto();
+        activeListing.setId(43L);
+        activeListing.setSettlementDate(LocalDate.now().plusDays(1));
+
+        EmployeeDto employee = new EmployeeDto();
+        employee.setId(2L);
+        employee.setIme("Ana");
+        employee.setPrezime("Agent");
+        employee.setEmail("ana.agent@example.com");
+
+        when(orderRepository.findByStatus(OrderStatus.PENDING)).thenReturn(List.of(expiredPending, activePending));
+        when(orderRepository.findByIdForUpdate(201L)).thenReturn(Optional.of(expiredPending));
+        when(orderRepository.findByIdForUpdate(202L)).thenReturn(Optional.of(activePending));
+        when(stockClient.getListing(42L)).thenReturn(expiredListing);
+        when(stockClient.getListing(43L)).thenReturn(activeListing);
+        when(employeeClient.getEmployee(2L)).thenReturn(employee);
+
+        service.autoDeclineExpiredPendingOrders();
+
+        assertThat(expiredPending.getStatus()).isEqualTo(OrderStatus.DECLINED);
+        assertThat(expiredPending.getApprovedBy()).isEqualTo(OrderCreationServiceImpl.SYSTEM_APPROVAL);
+        assertThat(activePending.getStatus()).isEqualTo(OrderStatus.PENDING);
+        verify(orderRepository).save(expiredPending);
+        verify(orderRepository, never()).save(activePending);
+        verify(orderNotificationProducer).sendOrderDeclined(any(OrderNotificationPayload.class));
     }
 }

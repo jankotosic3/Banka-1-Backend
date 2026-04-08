@@ -83,4 +83,9 @@ public interface OrderCreationService {
      * @return the updated order response
      */
     OrderResponse declineOrder(Long supervisorId, Long orderId);
+
+    /**
+     * Automatically declines pending orders whose settlement date has passed.
+     */
+    void autoDeclineExpiredPendingOrders();
 }

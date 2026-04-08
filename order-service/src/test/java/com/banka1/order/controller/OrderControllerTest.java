@@ -4,6 +4,7 @@ import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
 import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.service.OrderCreationService;
+import jakarta.validation.Valid;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +16,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -72,7 +74,18 @@ class OrderControllerTest {
 
         assertThat(mapping).isNotNull();
         assertThat(mapping.value()).containsExactly("/{id}/cancel");
-        assertThat(preAuthorize.value()).isEqualTo("hasRole('CLIENT') or hasRole('ACTUARY')");
+        assertThat(preAuthorize.value()).isEqualTo("hasRole('CLIENT') or hasRole('AGENT')");
+    }
+
+    @Test
+    void buyAndSellRequestsUseBeanValidation() throws Exception {
+        Method createBuyOrder = OrderController.class.getDeclaredMethod("createBuyOrder", Jwt.class, com.banka1.order.dto.CreateBuyOrderRequest.class);
+        assertThat(createBuyOrder.getParameters()[1].getAnnotation(Valid.class)).isNotNull();
+        assertThat(createBuyOrder.getParameters()[1].getAnnotation(RequestBody.class)).isNotNull();
+
+        Method createSellOrder = OrderController.class.getDeclaredMethod("createSellOrder", Jwt.class, com.banka1.order.dto.CreateSellOrderRequest.class);
+        assertThat(createSellOrder.getParameters()[1].getAnnotation(Valid.class)).isNotNull();
+        assertThat(createSellOrder.getParameters()[1].getAnnotation(RequestBody.class)).isNotNull();
     }
 
     private void assertGetMapping(String methodName) throws Exception {

@@ -1,5 +1,6 @@
 package com.banka1.order.client;
 
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.EmployeePageResponse;
 
@@ -34,7 +35,7 @@ public interface EmployeeClient {
      * Gets the bank account for a given currency.
      *
      * @param currency the currency code
-     * @return employee DTO representing the bank account
+     * @return bank account reference DTO
      */
-    EmployeeDto getBankAccount(String currency);
+    BankAccountDto getBankAccount(String currency);
 }

@@ -3,7 +3,6 @@ package com.banka1.order.scheduler;
 import com.banka1.order.service.ActuaryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -13,7 +12,6 @@ import org.springframework.stereotype.Component;
  * as specified in the Celina 3 actuary specification.
  */
 @Component
-@EnableScheduling
 @RequiredArgsConstructor
 @Slf4j
 public class ActuaryScheduler {

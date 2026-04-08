@@ -68,8 +68,9 @@ class ActuaryServiceTest {
 
         EmployeePageResponse page = new EmployeePageResponse();
         page.setContent(List.of(agentEmployee, supervisor));
+        page.setTotalPages(1);
 
-        when(employeeClient.searchEmployees(null, null, null, null, 0, 200)).thenReturn(page);
+        when(employeeClient.searchEmployees(null, null, null, null, 0, 100)).thenReturn(page);
         when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.of(actuaryInfo));
 
         var result = actuaryService.getAgents(null, null, null, null);
@@ -83,13 +84,14 @@ class ActuaryServiceTest {
     void getAgents_createsActuaryInfoIfMissing() {
         EmployeePageResponse page = new EmployeePageResponse();
         page.setContent(List.of(agentEmployee));
+        page.setTotalPages(1);
 
         ActuaryInfo newInfo = new ActuaryInfo();
         newInfo.setEmployeeId(1L);
         newInfo.setUsedLimit(BigDecimal.ZERO);
         newInfo.setNeedApproval(false);
 
-        when(employeeClient.searchEmployees(null, null, null, null, 0, 200)).thenReturn(page);
+        when(employeeClient.searchEmployees(null, null, null, null, 0, 100)).thenReturn(page);
         when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
         when(actuaryInfoRepository.save(any())).thenReturn(newInfo);
 
@@ -97,6 +99,45 @@ class ActuaryServiceTest {
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getUsedLimit()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void getAgents_traversesMultiplePagesAndKeepsOnlyAgents() {
+        EmployeeDto secondAgent = new EmployeeDto();
+        secondAgent.setId(4L);
+        secondAgent.setIme("Jelena");
+        secondAgent.setPrezime("Jelic");
+        secondAgent.setRole("AGENT");
+
+        EmployeeDto nonAgent = new EmployeeDto();
+        nonAgent.setId(5L);
+        nonAgent.setRole("SUPERVISOR");
+
+        EmployeePageResponse page0 = new EmployeePageResponse();
+        page0.setContent(List.of(agentEmployee, nonAgent));
+        page0.setTotalPages(2);
+
+        EmployeePageResponse page1 = new EmployeePageResponse();
+        page1.setContent(List.of(secondAgent));
+        page1.setTotalPages(2);
+
+        ActuaryInfo secondInfo = new ActuaryInfo();
+        secondInfo.setEmployeeId(4L);
+        secondInfo.setUsedLimit(BigDecimal.ZERO);
+        secondInfo.setNeedApproval(false);
+
+        when(employeeClient.searchEmployees(null, null, null, null, 0, 100)).thenReturn(page0);
+        when(employeeClient.searchEmployees(null, null, null, null, 1, 100)).thenReturn(page1);
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.of(actuaryInfo));
+        when(actuaryInfoRepository.findByEmployeeId(4L)).thenReturn(Optional.of(secondInfo));
+
+        var result = actuaryService.getAgents(null, null, null, null);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting("employeeId").containsExactlyInAnyOrder(1L, 4L);
+        verify(employeeClient).searchEmployees(null, null, null, null, 0, 100);
+        verify(employeeClient).searchEmployees(null, null, null, null, 1, 100);
+        verify(employeeClient, never()).searchEmployees(null, null, null, null, 0, 200);
     }
 
     @Test

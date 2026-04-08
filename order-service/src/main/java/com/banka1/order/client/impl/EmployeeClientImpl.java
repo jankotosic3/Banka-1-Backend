@@ -1,6 +1,7 @@
 package com.banka1.order.client.impl;
 
 import com.banka1.order.client.EmployeeClient;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.EmployeePageResponse;
 import lombok.RequiredArgsConstructor;
@@ -57,10 +58,10 @@ public class EmployeeClientImpl implements EmployeeClient {
      * {@inheritDoc}
      */
     @Override
-    public EmployeeDto getBankAccount(String currency) {
+    public BankAccountDto getBankAccount(String currency) {
         return employeeRestClient.get()
                 .uri("/employee/accounts/bank/{currency}", currency)
                 .retrieve()
-                .body(EmployeeDto.class);
+                .body(BankAccountDto.class);
     }
 }

@@ -4,6 +4,8 @@ import com.banka1.order.entity.ActuaryInfo;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -20,4 +22,12 @@ public interface ActuaryInfoRepository extends JpaRepository<ActuaryInfo, Long> 
      * @return the actuary info if it exists
      */
     Optional<ActuaryInfo> findByEmployeeId(Long employeeId);
+
+    /**
+     * Loads actuary rows for a set of employee identifiers in one repository call.
+     *
+     * @param employeeIds employee identifiers from employee-service
+     * @return matching actuary info rows
+     */
+    List<ActuaryInfo> findByEmployeeIdIn(Collection<Long> employeeIds);
 }

@@ -7,6 +7,7 @@ import com.banka1.order.dto.OrderOverviewResponse;
 import com.banka1.order.dto.OrderResponse;
 import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.service.OrderCreationService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -37,9 +38,9 @@ public class OrderController {
      * @return the created order response
      */
     @PostMapping("/buy")
-    @PreAuthorize("hasRole('CLIENT') or hasRole('ACTUARY')")
+    @PreAuthorize("hasRole('CLIENT') or hasRole('AGENT')")
     public ResponseEntity<OrderResponse> createBuyOrder(@AuthenticationPrincipal Jwt jwt,
-                                                        @RequestBody CreateBuyOrderRequest request) {
+                                                        @Valid @RequestBody CreateBuyOrderRequest request) {
         OrderResponse response = orderCreationService.createBuyOrder(toAuthenticatedUser(jwt), request);
         return ResponseEntity.ok(response);
     }
@@ -52,9 +53,9 @@ public class OrderController {
      * @return the created order response
      */
     @PostMapping("/sell")
-    @PreAuthorize("hasRole('CLIENT') or hasRole('ACTUARY')")
+    @PreAuthorize("hasRole('CLIENT') or hasRole('AGENT')")
     public ResponseEntity<OrderResponse> createSellOrder(@AuthenticationPrincipal Jwt jwt,
-                                                         @RequestBody CreateSellOrderRequest request) {
+                                                         @Valid @RequestBody CreateSellOrderRequest request) {
         OrderResponse response = orderCreationService.createSellOrder(toAuthenticatedUser(jwt), request);
         return ResponseEntity.ok(response);
     }
@@ -68,13 +69,13 @@ public class OrderController {
     }
 
     @PostMapping("/{id}/confirm")
-    @PreAuthorize("hasRole('CLIENT') or hasRole('ACTUARY')")
+    @PreAuthorize("hasRole('CLIENT') or hasRole('AGENT')")
     public ResponseEntity<OrderResponse> confirmOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
         return ResponseEntity.ok(orderCreationService.confirmOrder(toAuthenticatedUser(jwt), id));
     }
 
     @PostMapping("/{id}/cancel")
-    @PreAuthorize("hasRole('CLIENT') or hasRole('ACTUARY')")
+    @PreAuthorize("hasRole('CLIENT') or hasRole('AGENT')")
     public ResponseEntity<OrderResponse> cancelOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
         return ResponseEntity.ok(orderCreationService.cancelOrder(toAuthenticatedUser(jwt), id));
     }

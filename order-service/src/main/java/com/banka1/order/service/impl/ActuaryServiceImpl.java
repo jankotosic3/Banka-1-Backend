@@ -25,26 +25,43 @@ import java.util.List;
 @Slf4j
 public class ActuaryServiceImpl implements ActuaryService {
 
+    private static final int EMPLOYEE_PAGE_SIZE = 100;
+
     private final ActuaryInfoRepository actuaryInfoRepository;
     private final EmployeeClient employeeClient;
 
     /**
      * {@inheritDoc}
-     * Fetches up to 200 employees per page from employee-service, filters to AGENT role,
+     * Fetches employees from employee-service across all pages, filters to AGENT role,
      * and merges with local actuary limit data.
      */
     @Override
     public List<ActuaryAgentDto> getAgents(String email, String ime, String prezime, String pozicija) {
-        EmployeePageResponse page = employeeClient.searchEmployees(email, ime, prezime, pozicija, 0, 200);
+        List<ActuaryAgentDto> agents = new java.util.ArrayList<>();
+        int pageIndex = 0;
 
-        return page.getContent().stream()
-                .filter(emp -> "AGENT".equals(emp.getRole()))
-                .map(emp -> {
-                    ActuaryInfo info = actuaryInfoRepository.findByEmployeeId(emp.getId())
-                            .orElseGet(() -> createDefaultActuaryInfo(emp.getId()));
-                    return toDto(emp, info);
-                })
-                .toList();
+        while (true) {
+            EmployeePageResponse page = employeeClient.searchEmployees(email, ime, prezime, pozicija, pageIndex, EMPLOYEE_PAGE_SIZE);
+            if (page == null || page.getContent() == null || page.getContent().isEmpty()) {
+                break;
+            }
+
+            agents.addAll(page.getContent().stream()
+                    .filter(emp -> "AGENT".equals(emp.getRole()))
+                    .map(emp -> {
+                        ActuaryInfo info = actuaryInfoRepository.findByEmployeeId(emp.getId())
+                                .orElseGet(() -> createDefaultActuaryInfo(emp.getId()));
+                        return toDto(emp, info);
+                    })
+                    .toList());
+
+            pageIndex++;
+            if (pageIndex >= page.getTotalPages()) {
+                break;
+            }
+        }
+
+        return agents;
     }
 
     /**

@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -26,4 +27,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
      * Useful for monthly tax calculation.
      */
     List<Transaction> findByTimestampBetween(LocalDateTime start, LocalDateTime end);
+
+    List<Transaction> findByOrderIdInAndTimestampBetween(Collection<Long> orderIds, LocalDateTime start, LocalDateTime end);
+
+    List<Transaction> findByOrderIdInAndTimestampBefore(Collection<Long> orderIds, LocalDateTime end);
 }

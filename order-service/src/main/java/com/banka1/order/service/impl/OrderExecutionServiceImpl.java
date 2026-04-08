@@ -5,7 +5,7 @@ import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountTransactionRequest;
-import com.banka1.order.dto.EmployeeDto;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
 import com.banka1.order.entity.ActuaryInfo;
@@ -21,16 +21,18 @@ import com.banka1.order.repository.OrderRepository;
 import com.banka1.order.repository.PortfolioRepository;
 import com.banka1.order.repository.TransactionRepository;
 import com.banka1.order.service.OrderExecutionService;
+import org.springframework.beans.factory.ObjectProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Implementation of OrderExecutionService.
@@ -42,6 +44,7 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
 
     private static final String LIMIT_CURRENCY = "RSD";
     private static final String USD = "USD";
+    private static final long MISSING_QUOTE_RETRY_DELAY_MILLIS = 1000L;
 
     private final OrderRepository orderRepository;
     private final PortfolioRepository portfolioRepository;
@@ -51,76 +54,88 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
     private final EmployeeClient employeeClient;
     private final ExchangeClient exchangeClient;
     private final ActuaryInfoRepository actuaryInfoRepository;
-
-    private final Random random = new Random();
+    private final ObjectProvider<OrderExecutionService> selfProvider;
+    private final TaskScheduler orderExecutionTaskScheduler;
 
     @Override
-    @Async
     public void executeOrderAsync(Long orderId) {
-        Order order = orderRepository.findById(orderId).orElse(null);
-        while (order != null && order.getStatus() == OrderStatus.APPROVED && order.getRemainingPortions() > 0 && !order.getIsDone()) {
-            executeOrderPortion(order);
-            order = orderRepository.findById(orderId).orElse(null);
-            if (order == null || order.getStatus() != OrderStatus.APPROVED || order.getIsDone()) {
-                break;
-            }
+        scheduleExecution(orderId, 0L);
+    }
 
-            long delayMillis = calculateExecutionDelay(order);
-            if (delayMillis > 0) {
-                try {
-                    Thread.sleep(delayMillis);
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
+    private void processExecutionAttempt(Long orderId) {
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order == null || order.getStatus() != OrderStatus.APPROVED || order.getRemainingPortions() <= 0 || order.getIsDone()) {
+            return;
         }
+
+        selfProvider.getObject().executeOrderPortion(order);
+
+        Order updatedOrder = orderRepository.findById(orderId).orElse(null);
+        if (updatedOrder == null || updatedOrder.getStatus() != OrderStatus.APPROVED
+                || updatedOrder.getRemainingPortions() <= 0 || updatedOrder.getIsDone()) {
+            return;
+        }
+
+        scheduleExecution(orderId, calculateExecutionDelay(updatedOrder));
+    }
+
+    private void scheduleExecution(Long orderId, long delayMillis) {
+        Instant scheduledTime = Instant.now().plusMillis(Math.max(0L, delayMillis));
+        orderExecutionTaskScheduler.schedule(() -> processExecutionAttempt(orderId), scheduledTime);
     }
 
     @Override
     @Transactional
     public void executeOrderPortion(Order order) {
-        if (order.getRemainingPortions() <= 0 || order.getIsDone() || order.getStatus() != OrderStatus.APPROVED) {
+        Order managedOrder = orderRepository.findByIdForUpdate(order.getId()).orElse(null);
+        if (managedOrder == null
+                || managedOrder.getRemainingPortions() <= 0
+                || managedOrder.getIsDone()
+                || managedOrder.getStatus() != OrderStatus.APPROVED) {
             return;
         }
 
-        StockListingDto listing = stockClient.getListing(order.getListingId());
-        if (!activateIfEligible(order, listing)) {
+        StockListingDto listing = stockClient.getListing(managedOrder.getListingId());
+        if (!hasRequiredQuoteData(managedOrder, listing)) {
+            log.warn("Skipping execution attempt for order {} due to missing quote data", managedOrder.getId());
+            return;
+        }
+        if (!activateIfEligible(managedOrder, listing)) {
             return;
         }
 
-        Integer executableCapacity = currentExecutableCapacity(order, listing);
+        Integer executableCapacity = currentExecutableCapacity(managedOrder, listing);
         if (executableCapacity <= 0) {
             return;
         }
-        if (Boolean.TRUE.equals(order.getAllOrNone()) && executableCapacity < order.getRemainingPortions()) {
+        if (Boolean.TRUE.equals(managedOrder.getAllOrNone()) && executableCapacity < managedOrder.getRemainingPortions()) {
             return;
         }
 
-        int quantityToExecute = determineExecutionQuantity(order, executableCapacity);
-        BigDecimal executionPricePerUnit = calculateExecutionPricePerUnit(order, listing);
+        int quantityToExecute = determineExecutionQuantity(managedOrder, executableCapacity);
+        BigDecimal executionPricePerUnit = calculateExecutionPricePerUnit(managedOrder, listing);
         BigDecimal grossChunkAmount = executionPricePerUnit
-                .multiply(BigDecimal.valueOf(order.getContractSize()))
+                .multiply(BigDecimal.valueOf(managedOrder.getContractSize()))
                 .multiply(BigDecimal.valueOf(quantityToExecute));
-        BigDecimal commission = calculateCommission(orderPricingFamily(order.getOrderType()), grossChunkAmount, listing.getCurrency());
+        BigDecimal commission = calculateCommission(orderPricingFamily(managedOrder.getOrderType()), grossChunkAmount, listing.getCurrency());
 
-        createTransaction(order, quantityToExecute, executionPricePerUnit, grossChunkAmount, commission);
-        updatePortfolio(order, listing, quantityToExecute, executionPricePerUnit);
-        transferFunds(order, listing.getCurrency(), grossChunkAmount);
-        updateActuaryLimit(order, listing.getCurrency(), grossChunkAmount);
+        createTransaction(managedOrder, quantityToExecute, executionPricePerUnit, grossChunkAmount, commission);
+        updatePortfolio(managedOrder, listing, quantityToExecute, executionPricePerUnit);
+        transferFunds(managedOrder, listing.getCurrency(), grossChunkAmount);
+        updateActuaryLimit(managedOrder, listing.getCurrency(), grossChunkAmount);
 
-        order.setRemainingPortions(order.getRemainingPortions() - quantityToExecute);
-        if (order.getRemainingPortions() == 0) {
-            order.setIsDone(true);
-            order.setStatus(OrderStatus.DONE);
+        managedOrder.setRemainingPortions(managedOrder.getRemainingPortions() - quantityToExecute);
+        if (managedOrder.getRemainingPortions() == 0) {
+            managedOrder.setIsDone(true);
+            managedOrder.setStatus(OrderStatus.DONE);
         }
-        orderRepository.save(order);
+        orderRepository.save(managedOrder);
     }
 
     private boolean activateIfEligible(Order order, StockListingDto listing) {
         if (order.getOrderType() == OrderType.STOP) {
             boolean activated = order.getDirection() == OrderDirection.BUY
-                    ? listing.getAsk().compareTo(order.getStopValue()) > 0
+                    ? listing.getAsk().compareTo(order.getStopValue()) >= 0
                     : listing.getBid().compareTo(order.getStopValue()) < 0;
             if (activated) {
                 order.setOrderType(OrderType.MARKET);
@@ -163,7 +178,7 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         if (Boolean.TRUE.equals(order.getAllOrNone())) {
             return order.getRemainingPortions();
         }
-        return random.nextInt(executableCapacity) + 1;
+        return ThreadLocalRandom.current().nextInt(executableCapacity) + 1;
     }
 
     private BigDecimal calculateExecutionPricePerUnit(Order order, StockListingDto listing) {
@@ -223,7 +238,7 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
     }
 
     private void transferFunds(Order order, String currency, BigDecimal amount) {
-        EmployeeDto bankAccount = employeeClient.getBankAccount(currency);
+        BankAccountDto bankAccount = employeeClient.getBankAccount(currency);
         AccountTransactionRequest request = new AccountTransactionRequest();
         request.setAmount(amount);
         request.setCurrency(currency);
@@ -234,7 +249,7 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
             request.setFromAccountId(resolveDebitAccount(order, bankAccount, actuaryOrder));
             request.setToAccountId(resolveCreditAccount(order, bankAccount, actuaryOrder));
         } else {
-            request.setFromAccountId(bankAccount.getId());
+            request.setFromAccountId(bankAccount.getAccountId());
             request.setToAccountId(order.getAccountId());
         }
 
@@ -245,18 +260,18 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         accountClient.transfer(request);
     }
 
-    private Long resolveDebitAccount(Order order, EmployeeDto bankAccount, boolean actuaryOrder) {
+    private Long resolveDebitAccount(Order order, BankAccountDto bankAccount, boolean actuaryOrder) {
         if (actuaryOrder) {
-            return bankAccount.getId();
+            return bankAccount.getAccountId();
         }
         return order.getAccountId();
     }
 
-    private Long resolveCreditAccount(Order order, EmployeeDto bankAccount, boolean actuaryOrder) {
+    private Long resolveCreditAccount(Order order, BankAccountDto bankAccount, boolean actuaryOrder) {
         if (actuaryOrder) {
             return order.getAccountId();
         }
-        return bankAccount.getId();
+        return bankAccount.getAccountId();
     }
 
     private void updateActuaryLimit(Order order, String currency, BigDecimal amount) {
@@ -272,9 +287,12 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
 
     private long calculateExecutionDelay(Order order) {
         StockListingDto listing = stockClient.getListing(order.getListingId());
+        if (listing == null || !hasRequiredQuoteData(order, listing)) {
+            return MISSING_QUOTE_RETRY_DELAY_MILLIS;
+        }
         long volume = listing.getVolume() == null || listing.getVolume() <= 0 ? 1L : listing.getVolume();
         double maxSeconds = (24d * 60d) / (volume / (double) Math.max(1, order.getRemainingPortions()));
-        double delaySeconds = random.nextDouble() * maxSeconds;
+        double delaySeconds = ThreadLocalRandom.current().nextDouble() * maxSeconds;
         if (Boolean.TRUE.equals(order.getAfterHours())) {
             delaySeconds += 30d * 60d;
         }
@@ -294,6 +312,16 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
 
     private OrderType orderPricingFamily(OrderType orderType) {
         return orderType == OrderType.STOP_LIMIT ? OrderType.LIMIT : orderType;
+    }
+
+    private boolean hasRequiredQuoteData(Order order, StockListingDto listing) {
+        if (listing == null || listing.getPrice() == null) {
+            return false;
+        }
+        if (order.getDirection() == OrderDirection.BUY) {
+            return listing.getAsk() != null;
+        }
+        return listing.getBid() != null;
     }
 
     private BigDecimal convertAmount(String fromCurrency, String toCurrency, BigDecimal amount) {

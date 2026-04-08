@@ -85,18 +85,18 @@ class PortfolioControllerTest {
     void portfolioEndpointsHaveExpectedMappingsAndSecurity() throws Exception {
         Method getPortfolio = PortfolioController.class.getDeclaredMethod("getPortfolio", Jwt.class);
         assertThat(getPortfolio.getAnnotation(GetMapping.class)).isNotNull();
-        assertThat(getPortfolio.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('CLIENT','ACTUARY','AGENT')");
+        assertThat(getPortfolio.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('CLIENT','AGENT')");
 
         Method setPublic = PortfolioController.class.getDeclaredMethod("setPublicQuantity", Jwt.class, Long.class, SetPublicQuantityRequestDto.class);
         PutMapping setPublicMapping = setPublic.getAnnotation(PutMapping.class);
         assertThat(setPublicMapping).isNotNull();
         assertThat(setPublicMapping.value()).containsExactly("/{id}/set-public");
-        assertThat(setPublic.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('CLIENT','ACTUARY','AGENT')");
+        assertThat(setPublic.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('CLIENT','AGENT')");
 
         Method exercise = PortfolioController.class.getDeclaredMethod("exerciseOption", Jwt.class, Long.class);
         PostMapping exerciseMapping = exercise.getAnnotation(PostMapping.class);
         assertThat(exerciseMapping).isNotNull();
         assertThat(exerciseMapping.value()).containsExactly("/{id}/exercise-option");
-        assertThat(exercise.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAnyRole('ACTUARY','AGENT')");
+        assertThat(exercise.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('AGENT')");
     }
 }

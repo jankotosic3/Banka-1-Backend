@@ -5,7 +5,7 @@ import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountTransactionRequest;
-import com.banka1.order.dto.EmployeeDto;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
 import com.banka1.order.entity.ActuaryInfo;
@@ -20,6 +20,7 @@ import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
 import com.banka1.order.repository.PortfolioRepository;
 import com.banka1.order.repository.TransactionRepository;
+import com.banka1.order.service.OrderExecutionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,16 +28,22 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,13 +67,19 @@ class OrderExecutionServiceTest {
     private ExchangeClient exchangeClient;
     @Mock
     private ActuaryInfoRepository actuaryInfoRepository;
+    @Mock
+    private ObjectProvider<OrderExecutionService> selfProvider;
+    @Mock
+    private OrderExecutionService self;
+    @Mock
+    private TaskScheduler orderExecutionTaskScheduler;
 
     @InjectMocks
     private OrderExecutionServiceImpl service;
 
     private Order order;
     private StockListingDto listing;
-    private EmployeeDto bankAccount;
+    private BankAccountDto bankAccount;
     private Portfolio portfolio;
     private ActuaryInfo actuaryInfo;
 
@@ -97,8 +110,8 @@ class OrderExecutionServiceTest {
         listing.setVolume(50L);
         listing.setListingType(ListingType.STOCK);
 
-        bankAccount = new EmployeeDto();
-        bankAccount.setId(999L);
+        bankAccount = new BankAccountDto();
+        bankAccount.setAccountId(999L);
 
         portfolio = new Portfolio();
         portfolio.setId(50L);
@@ -123,6 +136,7 @@ class OrderExecutionServiceTest {
         lenient().when(stockClient.getListing(42L)).thenReturn(listing);
         lenient().when(employeeClient.getBankAccount("USD")).thenReturn(bankAccount);
         lenient().when(portfolioRepository.findByUserIdAndListingId(1L, 42L)).thenReturn(Optional.of(portfolio));
+        lenient().when(orderRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(order));
         lenient().when(transactionRepository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(portfolioRepository.save(any(Portfolio.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -130,6 +144,36 @@ class OrderExecutionServiceTest {
         lenient().when(exchangeClient.calculate("USD", "RSD", new BigDecimal("202.00"))).thenReturn(usdToRsd);
         lenient().when(exchangeClient.calculate("USD", "USD", new BigDecimal("7"))).thenReturn(usdCap);
         lenient().when(exchangeClient.calculate("USD", "USD", new BigDecimal("12"))).thenReturn(limitCap);
+        lenient().when(orderExecutionTaskScheduler.schedule(any(Runnable.class), any(Instant.class)))
+                .thenReturn(mock(ScheduledFuture.class));
+        lenient().when(selfProvider.getObject()).thenReturn(self);
+    }
+
+    @Test
+    void executeOrderAsync_schedulesImmediateExecutionAttempt() {
+        service.executeOrderAsync(10L);
+
+        verify(orderExecutionTaskScheduler).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    @Test
+    void executeOrderAsync_reschedulesInsteadOfSleepingWhenOrderRemainsApproved() {
+        order.setAfterHours(true);
+        org.mockito.ArgumentCaptor<Runnable> runnableCaptor = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+        org.mockito.ArgumentCaptor<Instant> instantCaptor = org.mockito.ArgumentCaptor.forClass(Instant.class);
+
+        when(orderRepository.findById(10L)).thenReturn(Optional.of(order));
+
+        service.executeOrderAsync(10L);
+        verify(orderExecutionTaskScheduler).schedule(runnableCaptor.capture(), instantCaptor.capture());
+
+        Instant firstScheduleTime = instantCaptor.getValue();
+        runnableCaptor.getValue().run();
+
+        verify(self).executeOrderPortion(order);
+        verify(orderExecutionTaskScheduler, org.mockito.Mockito.times(2)).schedule(any(Runnable.class), instantCaptor.capture());
+        Instant secondScheduleTime = instantCaptor.getAllValues().getLast();
+        assertThat(secondScheduleTime).isAfter(firstScheduleTime);
     }
 
     @Test
@@ -149,6 +193,64 @@ class OrderExecutionServiceTest {
         assertThat(transferCaptor.getValue().getToAccountId()).isEqualTo(999L);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DONE);
         assertThat(order.getIsDone()).isTrue();
+    }
+
+    @Test
+    void executeOrderPortion_reloadsLockedOrderAndSkipsCancelledState() {
+        Order staleOrder = new Order();
+        staleOrder.setId(10L);
+        staleOrder.setStatus(OrderStatus.APPROVED);
+        staleOrder.setRemainingPortions(1);
+        staleOrder.setIsDone(false);
+
+        Order cancelledOrder = new Order();
+        cancelledOrder.setId(10L);
+        cancelledOrder.setStatus(OrderStatus.CANCELLED);
+        cancelledOrder.setRemainingPortions(1);
+        cancelledOrder.setIsDone(true);
+
+        when(orderRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(cancelledOrder));
+
+        service.executeOrderPortion(staleOrder);
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+        verify(orderRepository, never()).save(cancelledOrder);
+    }
+
+    @Test
+    void executeOrderPortion_usesFreshLockedOrderStateAndDoesNotMutateStaleArgument() {
+        Order staleOrder = new Order();
+        staleOrder.setId(10L);
+        staleOrder.setStatus(OrderStatus.APPROVED);
+        staleOrder.setRemainingPortions(5);
+        staleOrder.setIsDone(false);
+
+        Order lockedOrder = new Order();
+        lockedOrder.setId(10L);
+        lockedOrder.setUserId(1L);
+        lockedOrder.setListingId(42L);
+        lockedOrder.setOrderType(OrderType.MARKET);
+        lockedOrder.setDirection(OrderDirection.BUY);
+        lockedOrder.setStatus(OrderStatus.APPROVED);
+        lockedOrder.setQuantity(1);
+        lockedOrder.setContractSize(2);
+        lockedOrder.setRemainingPortions(1);
+        lockedOrder.setIsDone(false);
+        lockedOrder.setAfterHours(false);
+        lockedOrder.setAllOrNone(false);
+        lockedOrder.setAccountId(5L);
+
+        when(orderRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(lockedOrder));
+        when(portfolioRepository.findByUserIdAndListingId(1L, 42L)).thenReturn(Optional.empty());
+
+        service.executeOrderPortion(staleOrder);
+
+        assertThat(staleOrder.getRemainingPortions()).isEqualTo(5);
+        assertThat(lockedOrder.getRemainingPortions()).isZero();
+        verify(accountClient).transfer(any(AccountTransactionRequest.class));
+        verify(transactionRepository).save(any(Transaction.class));
     }
 
     @Test
@@ -277,11 +379,54 @@ class OrderExecutionServiceTest {
     }
 
     @Test
+    void executeOrderPortion_skipsWhenAskQuoteMissing() {
+        listing.setAsk(null);
+
+        service.executeOrderPortion(order);
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+    }
+
+    @Test
+    void executeOrderPortion_skipsWhenBidQuoteMissing() {
+        order.setDirection(OrderDirection.SELL);
+        listing.setBid(null);
+
+        service.executeOrderPortion(order);
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+    }
+
+    @Test
+    void executeOrderPortion_skipsWhenMarketPriceMissing() {
+        listing.setPrice(null);
+
+        service.executeOrderPortion(order);
+
+        verify(transactionRepository, never()).save(any(Transaction.class));
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+    }
+
+    @Test
     void afterHoursDelayAddsThirtyMinutes() {
         order.setAfterHours(true);
 
         long delay = (long) ReflectionTestUtils.invokeMethod(service, "calculateExecutionDelay", order);
 
         assertThat(delay).isGreaterThanOrEqualTo(30L * 60L * 1000L);
+    }
+
+    @Test
+    void calculateExecutionDelay_usesRetryDelayWhenQuoteDataMissing() {
+        listing.setAsk(null);
+
+        long delay = (long) ReflectionTestUtils.invokeMethod(service, "calculateExecutionDelay", order);
+
+        assertThat(delay).isEqualTo(1000L);
     }
 }

@@ -6,13 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.http.HttpRequest;
-import org.springframework.http.client.ClientHttpRequestExecution;
 import org.springframework.http.client.ClientHttpRequestInterceptor;
-import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.web.client.RestClient;
-
-import java.io.IOException;
 
 /**
  * Configuration for {@link RestClient} instances used to communicate with external microservices.
@@ -26,17 +21,12 @@ public class RestClientConfig {
 
     private final JWTService jwtService;
 
-    /**
-     * Interceptor that injects an {@code Authorization: Bearer <token>} header
-     * into every outgoing HTTP request using a freshly generated service JWT.
-     */
-    class JwtAuthInterceptor implements ClientHttpRequestInterceptor {
-        @Override
-        public ClientHttpResponse intercept(HttpRequest request, byte[] body, ClientHttpRequestExecution execution) throws IOException {
-            String token = jwtService.generateJwtToken();
-            request.getHeaders().set("Authorization", "Bearer " + token);
-            return execution.execute(request, body);
-        }
+    @Value("${banka.security.expiration-time:3600000}")
+    private long tokenValidityMillis;
+
+    @Bean
+    public ClientHttpRequestInterceptor jwtAuthInterceptor() {
+        return new ServiceJwtAuthInterceptor(jwtService, tokenValidityMillis);
     }
 
     /**
@@ -46,9 +36,9 @@ public class RestClientConfig {
      * @return a builder with the JWT interceptor attached
      */
     @Bean
-    public RestClient.Builder restClientBuilder() {
+    public RestClient.Builder restClientBuilder(ClientHttpRequestInterceptor jwtAuthInterceptor) {
         return RestClient.builder()
-                .requestInterceptor(new JwtAuthInterceptor());
+                .requestInterceptor(jwtAuthInterceptor);
     }
 
     /**

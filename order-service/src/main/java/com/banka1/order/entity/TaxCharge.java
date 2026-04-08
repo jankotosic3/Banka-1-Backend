@@ -26,11 +26,19 @@ public class TaxCharge {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    @Column(name = "sell_transaction_id", nullable = false)
     private Long sellTransactionId;
 
-    @Column(nullable = false)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "sell_transaction_id", insertable = false, updatable = false)
+    private Transaction sellTransaction;
+
+    @Column(name = "buy_transaction_id", nullable = false)
     private Long buyTransactionId;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "buy_transaction_id", insertable = false, updatable = false)
+    private Transaction buyTransaction;
 
     @Column(nullable = false)
     private Long userId;

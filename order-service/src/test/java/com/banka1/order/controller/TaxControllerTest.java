@@ -18,9 +18,8 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class TaxControllerTest {
@@ -37,14 +36,12 @@ class TaxControllerTest {
 
     @Test
     void runTaxEndpoints_delegateToTaxService() {
-        ResponseEntity<Void> response = controller.runTaxCalculation();
         ResponseEntity<Void> collectResponse = controller.collectTax();
         ResponseEntity<Void> internalResponse = controller.runTaxCalculationInternal();
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(collectResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(internalResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(taxService, times(2)).collectMonthlyTaxManually();
+        verify(taxService).collectMonthlyTaxManually();
         verify(taxService).collectMonthlyTax();
     }
 
@@ -62,10 +59,6 @@ class TaxControllerTest {
 
     @Test
     void taxEndpointsHaveExpectedMappingsAndSecurity() throws Exception {
-        Method runTaxCalculation = TaxController.class.getDeclaredMethod("runTaxCalculation");
-        assertThat(runTaxCalculation.getAnnotation(PostMapping.class).value()).containsExactly("/api/tax/capital-gains/run");
-        assertThat(runTaxCalculation.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('SUPERVISOR')");
-
         Method collectTax = TaxController.class.getDeclaredMethod("collectTax");
         assertThat(collectTax.getAnnotation(PostMapping.class).value()).containsExactly("/api/tax/collect");
         assertThat(collectTax.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('SUPERVISOR')");

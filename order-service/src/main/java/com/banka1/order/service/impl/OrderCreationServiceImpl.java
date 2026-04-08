@@ -7,6 +7,7 @@ import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.AuthenticatedUser;
+import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.CreateBuyOrderRequest;
 import com.banka1.order.dto.CreateSellOrderRequest;
 import com.banka1.order.dto.EmployeeDto;
@@ -24,6 +25,10 @@ import com.banka1.order.entity.enums.OrderDirection;
 import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.exception.BadRequestException;
+import com.banka1.order.exception.BusinessConflictException;
+import com.banka1.order.exception.ForbiddenOperationException;
+import com.banka1.order.exception.ResourceNotFoundException;
 import com.banka1.order.rabbitmq.OrderNotificationProducer;
 import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
@@ -38,8 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Implementation of OrderCreationService.
@@ -116,8 +124,29 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                 ? orderRepository.findAll()
                 : orderRepository.findByStatus(OrderStatus.valueOf(statusFilter.name()));
 
+        Set<Long> listingIds = new HashSet<>();
+        Set<Long> userIds = new HashSet<>();
+        for (Order order : orders) {
+            if (order.getListingId() != null) {
+                listingIds.add(order.getListingId());
+            }
+            if (order.getUserId() != null) {
+                userIds.add(order.getUserId());
+            }
+        }
+
+        Map<Long, StockListingDto> listingCache = new HashMap<>();
+        for (Long listingId : listingIds) {
+            listingCache.put(listingId, stockClient.getListing(listingId));
+        }
+
+        Set<Long> actuaryUserIds = actuaryInfoRepository.findByEmployeeIdIn(userIds).stream()
+                .map(ActuaryInfo::getEmployeeId)
+                .collect(java.util.stream.Collectors.toSet());
+        Map<Long, EmployeeDto> employeeCache = new HashMap<>();
+
         return orders.stream()
-                .map(this::mapToOverviewResponse)
+                .map(order -> mapToOverviewResponse(order, listingCache, employeeCache, actuaryUserIds))
                 .toList();
     }
 
@@ -126,7 +155,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     public OrderResponse confirmOrder(AuthenticatedUser user, Long orderId) {
         Order order = getOwnedOrder(user.userId(), orderId);
         if (order.getStatus() != OrderStatus.PENDING_CONFIRMATION) {
-            throw new IllegalStateException("Only draft orders can be confirmed");
+            throw new BusinessConflictException("Only draft orders can be confirmed");
         }
 
         StockListingDto listing = stockClient.getListing(order.getListingId());
@@ -150,10 +179,11 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         } else if (order.getDirection() == OrderDirection.BUY) {
             checkFunds(fundingAccountId, approximatePrice.add(fee));
         }
-
-        transferFee(order.getAccountId(), fee, listing.getCurrency());
-
         OrderStatus finalStatus = determineOrderStatus(user.userId(), approximatePrice, listing.getCurrency());
+        if(finalStatus == OrderStatus.APPROVED) {
+            transferFee(order.getAccountId(), fee, listing.getCurrency());
+        }
+
         order.setStatus(finalStatus);
         order.setApprovedBy(finalStatus == OrderStatus.APPROVED ? NO_APPROVAL_REQUIRED : null);
         order = orderRepository.save(order);
@@ -167,29 +197,34 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     @Override
     @Transactional
     public OrderResponse cancelOrder(AuthenticatedUser user, Long orderId) {
-        Order order = getOwnedOrder(user.userId(), orderId);
+        Order order = getOwnedOrderForUpdate(user.userId(), orderId);
         return cancelOrderInternal(order);
     }
 
     @Override
     @Transactional
     public OrderResponse cancelOrder(Long orderId) {
-        Order order = orderRepository.findById(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new ResourceNotFoundException("Order not found"));
         return cancelOrderInternal(order);
     }
 
     @Override
     @Transactional
     public OrderResponse approveOrder(Long supervisorId, Long orderId) {
-        Order order = orderRepository.findById(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new ResourceNotFoundException("Order not found"));
         if (order.getStatus() != OrderStatus.PENDING) {
-            throw new IllegalStateException("Only pending orders can be approved");
+            throw new BusinessConflictException("Only pending orders can be approved");
         }
 
         StockListingDto listing = stockClient.getListing(order.getListingId());
         if (hasPastSettlementDate(listing)) {
-            throw new IllegalStateException("Orders with past settlement date can only be declined");
+            throw new BusinessConflictException("Orders with past settlement date can only be declined");
         }
+
+        BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
+                order.getQuantity(), order.getLimitValue(), order.getStopValue());
+        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency());
+        transferFee(order.getAccountId(), fee, listing.getCurrency());
 
         order.setStatus(OrderStatus.APPROVED);
         order.setApprovedBy(supervisorId);
@@ -197,6 +232,19 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         publishOrderDecisionNotification(order, supervisorId, OrderStatus.APPROVED);
         orderExecutionService.executeOrderAsync(order.getId());
 
+        return mapToResponse(order, approximatePrice, fee);
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse declineOrder(Long supervisorId, Long orderId) {
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        if (order.getStatus() != OrderStatus.PENDING) {
+            throw new BusinessConflictException("Only pending orders can be declined");
+        }
+        order = declinePendingOrder(order, supervisorId, true);
+
+        StockListingDto listing = stockClient.getListing(order.getListingId());
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
         return mapToResponse(order, approximatePrice, calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()));
@@ -204,21 +252,20 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
     @Override
     @Transactional
-    public OrderResponse declineOrder(Long supervisorId, Long orderId) {
-        Order order = orderRepository.findById(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found"));
-        if (order.getStatus() != OrderStatus.PENDING) {
-            throw new IllegalStateException("Only pending orders can be declined");
+    public void autoDeclineExpiredPendingOrders() {
+        for (Order pendingOrder : orderRepository.findByStatus(OrderStatus.PENDING)) {
+            Order lockedOrder = orderRepository.findByIdForUpdate(pendingOrder.getId()).orElse(null);
+            if (lockedOrder == null || lockedOrder.getStatus() != OrderStatus.PENDING) {
+                continue;
+            }
+
+            StockListingDto listing = stockClient.getListing(lockedOrder.getListingId());
+            if (!hasPastSettlementDate(listing)) {
+                continue;
+            }
+
+            declinePendingOrder(lockedOrder, SYSTEM_APPROVAL, true);
         }
-
-        order.setStatus(OrderStatus.DECLINED);
-        order.setApprovedBy(supervisorId);
-        order = orderRepository.save(order);
-        publishOrderDecisionNotification(order, supervisorId, OrderStatus.DECLINED);
-
-        StockListingDto listing = stockClient.getListing(order.getListingId());
-        BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
-                order.getQuantity(), order.getLimitValue(), order.getStopValue());
-        return mapToResponse(order, approximatePrice, calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()));
     }
 
     private Order buildBaseOrder(Long userId, Long listingId, OrderType orderType, Integer quantity, StockListingDto listing,
@@ -255,19 +302,19 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
     private void validateCommonRequest(Long listingId, Integer quantity, Long accountId, BigDecimal limitValue, BigDecimal stopValue) {
         if (listingId == null || quantity == null || quantity <= 0 || accountId == null) {
-            throw new IllegalArgumentException("Invalid request parameters");
+            throw new BadRequestException("Invalid request parameters");
         }
         if (limitValue != null && limitValue.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Limit value must be positive");
+            throw new BadRequestException("Limit value must be positive");
         }
         if (stopValue != null && stopValue.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Stop value must be positive");
+            throw new BadRequestException("Stop value must be positive");
         }
     }
 
     private OrderResponse cancelOrderInternal(Order order) {
         if (order.getStatus() == OrderStatus.DONE || order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.DECLINED) {
-            throw new IllegalStateException("Order can no longer be cancelled");
+            throw new BusinessConflictException("Order can no longer be cancelled");
         }
         order.setStatus(OrderStatus.CANCELLED);
         order.setIsDone(true);
@@ -280,19 +327,37 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                 calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()));
     }
 
+    private Order declinePendingOrder(Order order, Long approverId, boolean publishNotification) {
+        order.setStatus(OrderStatus.DECLINED);
+        order.setApprovedBy(approverId);
+        Order savedOrder = orderRepository.save(order);
+        if (publishNotification) {
+            publishOrderDecisionNotification(savedOrder, approverId, OrderStatus.DECLINED);
+        }
+        return savedOrder;
+    }
+
     private Order getOwnedOrder(Long userId, Long orderId) {
-        Order order = orderRepository.findById(orderId).orElseThrow(() -> new IllegalArgumentException("Order not found"));
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new ResourceNotFoundException("Order not found"));
         if (!order.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("Order does not belong to the authenticated user");
+            throw new ForbiddenOperationException("Order does not belong to the authenticated user");
+        }
+        return order;
+    }
+
+    private Order getOwnedOrderForUpdate(Long userId, Long orderId) {
+        Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+        if (!order.getUserId().equals(userId)) {
+            throw new ForbiddenOperationException("Order does not belong to the authenticated user");
         }
         return order;
     }
 
     private void ensurePortfolioOwnership(Long userId, Long listingId, Integer requestedQuantity) {
         Portfolio portfolio = portfolioRepository.findByUserIdAndListingId(userId, listingId)
-                .orElseThrow(() -> new IllegalArgumentException("Portfolio position not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Portfolio position not found"));
         if (portfolio.getQuantity() < requestedQuantity) {
-            throw new IllegalArgumentException("Insufficient portfolio quantity");
+            throw new BusinessConflictException("Insufficient portfolio quantity");
         }
     }
 
@@ -343,7 +408,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
     private void checkMarginRequirements(AuthenticatedUser user, Long fundingAccountId, StockListingDto listing, Integer quantity) {
         if (!user.hasMarginPermission()) {
-            throw new IllegalArgumentException("User does not have margin permission");
+            throw new BusinessConflictException("User does not have margin permission");
         }
 
         BigDecimal initialMarginCost = calculateInitialMarginCost(listing, quantity);
@@ -353,7 +418,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         boolean hasCredit = availableCredit.compareTo(initialMarginCost) > 0;
         boolean hasFunds = balance.compareTo(initialMarginCost) > 0;
         if (!hasCredit && !hasFunds) {
-            throw new IllegalArgumentException("Margin requirements are not satisfied");
+            throw new BusinessConflictException("Margin requirements are not satisfied");
         }
     }
 
@@ -386,7 +451,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         AccountDetailsDto account = accountClient.getAccountDetails(accountId);
         BigDecimal balance = account.getBalance() == null ? BigDecimal.ZERO : account.getBalance();
         if (balance.compareTo(totalAmount) < 0) {
-            throw new IllegalArgumentException("Insufficient funds");
+            throw new BusinessConflictException("Insufficient funds");
         }
     }
 
@@ -407,10 +472,10 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     }
 
     private void transferFee(Long accountId, BigDecimal fee, String currency) {
-        EmployeeDto bankAccount = employeeClient.getBankAccount(currency);
+        BankAccountDto bankAccount = employeeClient.getBankAccount(currency);
         AccountTransactionRequest transferRequest = new AccountTransactionRequest();
         transferRequest.setFromAccountId(accountId);
-        transferRequest.setToAccountId(bankAccount.getId());
+        transferRequest.setToAccountId(bankAccount.getAccountId());
         transferRequest.setAmount(fee);
         transferRequest.setCurrency(currency);
         transferRequest.setDescription("Order fee");
@@ -427,9 +492,6 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     }
 
     private Long determineFundingAccountId(Long userId, Long selectedAccountId, String currency) {
-        if (actuaryInfoRepository.findByEmployeeId(userId).isPresent()) {
-            return employeeClient.getBankAccount(currency).getId();
-        }
         return selectedAccountId;
     }
 
@@ -444,12 +506,13 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         return conversion.getConvertedAmount() == null ? amount : conversion.getConvertedAmount();
     }
 
-    private OrderOverviewResponse mapToOverviewResponse(Order order) {
+    private OrderOverviewResponse mapToOverviewResponse(Order order, Map<Long, StockListingDto> listingCache,
+                                                        Map<Long, EmployeeDto> employeeCache, Set<Long> actuaryUserIds) {
         OrderOverviewResponse response = new OrderOverviewResponse();
         response.setOrderId(order.getId());
-        response.setAgentName(resolveAgentName(order.getUserId()));
+        response.setAgentName(resolveAgentName(order.getUserId(), employeeCache, actuaryUserIds));
         response.setOrderType(order.getOrderType());
-        response.setListingType(resolveListingType(order.getListingId()));
+        response.setListingType(resolveListingType(order.getListingId(), listingCache));
         response.setQuantity(order.getQuantity());
         response.setContractSize(order.getContractSize());
         response.setPricePerUnit(order.getPricePerUnit());
@@ -459,16 +522,17 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         return response;
     }
 
-    private ListingType resolveListingType(Long listingId) {
-        return stockClient.getListing(listingId).getListingType();
+    private ListingType resolveListingType(Long listingId, Map<Long, StockListingDto> listingCache) {
+        StockListingDto listing = listingCache.get(listingId);
+        return listing == null ? null : listing.getListingType();
     }
 
-    private String resolveAgentName(Long userId) {
-        if (actuaryInfoRepository.findByEmployeeId(userId).isEmpty()) {
+    private String resolveAgentName(Long userId, Map<Long, EmployeeDto> employeeCache, Set<Long> actuaryUserIds) {
+        if (!actuaryUserIds.contains(userId)) {
             return null;
         }
         try {
-            EmployeeDto employee = employeeClient.getEmployee(userId);
+            EmployeeDto employee = employeeCache.computeIfAbsent(userId, employeeClient::getEmployee);
             if (employee == null) {
                 return null;
             }
