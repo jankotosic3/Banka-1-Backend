@@ -1,5 +1,6 @@
 package com.banka1.account_service.service;
 
+import com.banka1.account_service.dto.request.BankPaymentDto;
 import com.banka1.account_service.dto.request.PaymentDto;
 
 import com.banka1.account_service.domain.enums.CurrencyCode;
@@ -22,6 +23,9 @@ public interface AccountService {
      * @return azurirana stanja oba racuna nakon transakcije
      */
     UpdatedBalanceResponseDto transaction(PaymentDto paymentDto);
+
+
+    UpdatedBalanceResponseDto transactionFromBank(BankPaymentDto paymentDto);
 
     /**
      * Izvrsava transfer izmedju dva racuna istog vlasnika.

@@ -3,6 +3,7 @@ package com.banka1.account_service.service.implementation;
 import com.banka1.account_service.domain.Account;
 import com.banka1.account_service.domain.enums.CurrencyCode;
 import com.banka1.account_service.domain.enums.Status;
+import com.banka1.account_service.dto.request.BankPaymentDto;
 import com.banka1.account_service.dto.request.PaymentDto;
 import com.banka1.account_service.dto.response.InfoResponseDto;
 import com.banka1.account_service.dto.response.InternalAccountDetailsDto;
@@ -117,6 +118,19 @@ public class AccountServiceImplementation implements AccountService {
         return execute(paymentDto, from, to, bankSender, bankTarget);
     }
 
+    @Override
+    public UpdatedBalanceResponseDto transactionFromBank(BankPaymentDto paymentDto) {
+        Account to=validate(paymentDto.getToAccountNumber());
+        Account bankTarget=validateBank(to);
+        for(int i = 0; true; i++) {
+            try {
+                return transactionalService.transfer(bankTarget,to,paymentDto);
+            } catch (ObjectOptimisticLockingFailureException | OptimisticLockException optimisticLockException) {
+                if(i>=2)
+                    throw optimisticLockException;
+            }
+        }
+    }
 
 
     @Override

@@ -1,27 +1,31 @@
 package com.banka1.credit_service.service.implementation;
 
+import com.banka1.credit_service.domain.Loan;
 import com.banka1.credit_service.domain.LoanRequest;
 import com.banka1.credit_service.domain.enums.CurrencyCode;
 import com.banka1.credit_service.domain.enums.InterestType;
 import com.banka1.credit_service.domain.enums.LoanType;
 import com.banka1.credit_service.domain.enums.Status;
+import com.banka1.credit_service.dto.request.BankPaymentDto;
 import com.banka1.credit_service.dto.request.LoanRequestDto;
-import com.banka1.credit_service.dto.response.AccountDetailsResponseDto;
-import com.banka1.credit_service.dto.response.ConversionResponseDto;
-import com.banka1.credit_service.dto.response.LoanRequestResponseDto;
+import com.banka1.credit_service.dto.response.*;
 import com.banka1.credit_service.repository.LoanRequestRepository;
 import com.banka1.credit_service.rest_client.AccountService;
 import com.banka1.credit_service.rest_client.ExchangeService;
 import com.banka1.credit_service.service.LoanService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 @RequiredArgsConstructor
@@ -36,17 +40,24 @@ public class LoanServiceImplementation implements LoanService {
     @Value("${banka.security.id}")
     private String appPropertiesId;
 
+    private final double startRange=-1.5;
+    private final double endRange=1.5;
+
+    private BigDecimal referenceRate=BigDecimal.valueOf(ThreadLocalRandom.current().nextDouble(startRange, endRange)).setScale(4, RoundingMode.HALF_UP);
+
 
 
     BigDecimal[] iznosi={BigDecimal.valueOf(500_000), BigDecimal.valueOf(1_000_000), BigDecimal.valueOf(2_000_000), BigDecimal.valueOf(5_000_000), BigDecimal.valueOf(10_000_000), BigDecimal.valueOf(20_000_000)};
 
-    private BigDecimal interestRate(BigDecimal amount, CurrencyCode currencyCode,LoanType loanType, InterestType interestType,BigDecimal referenceRate)
+    private BigDecimal interestRate(BigDecimal amount, CurrencyCode currencyCode,LoanType loanType, InterestType interestType)
     {
 
         if(currencyCode!=CurrencyCode.RSD)
         {
             ConversionResponseDto conversionResponseDto=exchangeService.calculate(currencyCode,CurrencyCode.RSD,amount);
             amount=conversionResponseDto.toAmount();
+            if(amount==null)
+                throw new RuntimeException("Greska sa exchange servisom");
         }
 
         int start=0;
@@ -65,9 +76,10 @@ public class LoanServiceImplementation implements LoanService {
                 break;
         }
         BigDecimal val=BigDecimal.valueOf(6.25).subtract(BigDecimal.valueOf(0.25).multiply(BigDecimal.valueOf(start))).add(loanType.getMarza());
-        if(interestType==InterestType.VARIABLE)
-            val=val.add(referenceRate);
-        return val;
+        if(interestType==InterestType.VARIABLE) {
+            val = val.add(getReferenceRate());
+        }
+        return val.divide(BigDecimal.valueOf(1200),10, RoundingMode.HALF_UP);
     }
 
     @Transactional
@@ -98,5 +110,81 @@ public class LoanServiceImplementation implements LoanService {
         }
         LoanRequest loanRequest=loanRequestRepository.save(new LoanRequest(loanRequestDto.getLoanType(),loanRequestDto.getInterestType(),loanRequestDto.getAmount(),loanRequestDto.getCurrency(),loanRequestDto.getPurpose(),loanRequestDto.getMonthlySalary(),loanRequestDto.getEmploymentStatus(),loanRequestDto.getCurrentEmploymentPeriod(),loanRequestDto.getRepaymentPeriod(),loanRequestDto.getContactPhone(),loanRequestDto.getAccountNumber(),loanRequestDto.getClientId(), Status.PENDING));
         return new LoanRequestResponseDto(loanRequest.getId(),loanRequest.getCreatedAt());
+    }
+
+    @Transactional
+    @Override
+    public String confirmation(Jwt jwt, Long id,Status status) {
+
+        if(loanRequestRepository.updateStatus(id,status)!=1)
+        {
+            LoanRequest loanRequest=loanRequestRepository.findById(id).orElse(null);
+            if(loanRequest==null)
+                throw new RuntimeException("Ne postoji loanRequest sa ovim id-em");
+            throw new RuntimeException("Umesto PENDING status je: "+loanRequest.getStatus());
+        }
+        if(status==Status.APPROVED)
+        {
+            LoanRequest loanRequest=loanRequestRepository.findById(id).orElse(null);
+            if(loanRequest==null)
+                throw new IllegalStateException("Ako se ovo desi obavezno neka me neko kontaktira (Ognjen) posto ovo ne bi trebalo da je moguce");
+            BigDecimal interest=interestRate(loanRequest.getAmount(),loanRequest.getCurrency(),loanRequest.getLoanType(),loanRequest.getInterestType());
+            BigDecimal stepen=interest.add(BigDecimal.ONE).pow(loanRequest.getRepaymentPeriod());
+            BigDecimal val=interest.multiply(stepen).divide(stepen.subtract(BigDecimal.ONE),10, RoundingMode.HALF_UP);
+            BigDecimal monthlyRate=loanRequest.getAmount().multiply(val);
+            UpdatedBalanceResponseDto updatedBalanceResponseDto=accountService.transactionFromBank(new BankPaymentDto(loanRequest.getAccountNumber(),loanRequest.getAmount()));
+            Loan loan=new Loan();
+            loan.setLoanType(loanRequest.getLoanType());
+            loan.setAccountNumber(loanRequest.getAccountNumber());
+            loan.setAmount(updatedBalanceResponseDto.getReceiverBalance());
+            //loan.setRepaymentMethod(loanRequest.getRepaymentMethod());
+            loan.setInterestType(loanRequest.getInterestType());
+            //loan.setAgreementDate(loanRequest.getAgreementDate());
+            //loan.setMaturityDate(loanRequest.getMaturityDate());
+            //loan.setInstallmentAmount(loanRequest.getInstallmentAmount());
+            //loan.setNextInstallmentDate(loanRequest);
+            //loan.setRemainingDebt(loanRequest.getre);
+            loan.setCurrency(loanRequest.getCurrency());
+            //todo ovo bi trebalo da radi ali proveri
+            loan.setStatus(loanRequest.getStatus());
+
+        }
+        return "";
+    }
+
+
+    @Scheduled(cron = "0 0 0 1 * *", zone = "Europe/Belgrade")
+    public void generateReferenceRate()
+    {
+        double random = ThreadLocalRandom.current().nextDouble(startRange, endRange);
+        setReferenceRate(BigDecimal.valueOf(random).setScale(4, RoundingMode.HALF_UP));
+    }
+
+    public synchronized BigDecimal getReferenceRate() {
+        return referenceRate;
+    }
+
+    public synchronized void setReferenceRate(BigDecimal referenceRate) {
+        this.referenceRate = referenceRate;
+    }
+
+    @Override
+    public Page<LoanResponseDto> find(Jwt jwt, int page, int size) {
+        return null;
+    }
+
+    @Override
+    public LoanInfoResponseDto info(Jwt jwt, Long id) {
+        return null;
+    }
+
+    @Override
+    public Page<LoanRequest> findAllLoanRequest(Jwt jwt, String vrstaKredita, String brojRacuna, int page, int size) {
+        return null;
+    }
+
+    @Override
+    public Page<LoanResponseDto> findAllLoans(Jwt jwt, String vrstaKredita, String brojRacuna, Status status, int page, int size) {
+        return null;
     }
 }

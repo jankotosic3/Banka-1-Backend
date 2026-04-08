@@ -3,6 +3,7 @@ package com.banka1.credit_service.controller;
 import com.banka1.credit_service.domain.LoanRequest;
 import com.banka1.credit_service.domain.enums.InterestType;
 import com.banka1.credit_service.domain.enums.LoanType;
+import com.banka1.credit_service.domain.enums.Status;
 import com.banka1.credit_service.dto.request.LoanRequestDto;
 import com.banka1.credit_service.dto.response.LoanInfoResponseDto;
 import com.banka1.credit_service.dto.response.LoanRequestResponseDto;
@@ -39,39 +40,48 @@ public class LoanController {
     @PutMapping("/requests/{id}/approve")
     public ResponseEntity<String> approve(@AuthenticationPrincipal Jwt jwt,@PathVariable Long id)
     {
-        return null;
+        return new ResponseEntity<>(loanService.confirmation(jwt,id,Status.APPROVED),HttpStatus.OK);
     }
     @PreAuthorize("hasRole('BASIC')")
     @PutMapping("/requests/{id}/decline")
     public ResponseEntity<String> decline(@AuthenticationPrincipal Jwt jwt,@PathVariable Long id)
     {
-        return null;
+
+        return new ResponseEntity<>(loanService.confirmation(jwt,id,Status.DECLINED),HttpStatus.OK);
     }
 
     @PreAuthorize("hasRole('CLIENT_BASIC')")
     @GetMapping("/client")
     public ResponseEntity<Page<LoanResponseDto>> find(@AuthenticationPrincipal Jwt jwt,@RequestParam(defaultValue = "0") @Min(value = 0) int page, @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
     {
-        return null;
+        return new ResponseEntity<>(loanService.find(jwt,page,size),HttpStatus.OK);
     }
 
     @PreAuthorize("hasAnyRole('CLIENT_BASIC','BASIC')")
     @GetMapping("/{loanNumber}")
     public ResponseEntity<LoanInfoResponseDto> info(@AuthenticationPrincipal Jwt jwt, @PathVariable Long loanNumber)
     {
-        return null;
+        return new ResponseEntity<>(loanService.info(jwt,loanNumber),HttpStatus.OK);
     }
 
     @PreAuthorize("hasRole('BASIC')")
     @GetMapping("/requests")
     public ResponseEntity<Page<LoanRequest>> findAllLoanRequest(@AuthenticationPrincipal Jwt jwt, @RequestParam(required = false) String vrstaKredita, @RequestParam(required = false) String brojRacuna,@RequestParam(defaultValue = "0") @Min(value = 0) int page, @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
     {
-        return null;
+        return new ResponseEntity<>(loanService.findAllLoanRequest(jwt,vrstaKredita,brojRacuna,page,size),HttpStatus.OK);
     }
     @PreAuthorize("hasRole('BASIC')")
     @GetMapping("/all")
     public ResponseEntity<Page<LoanResponseDto>> findAllLoans(@AuthenticationPrincipal Jwt jwt,@RequestParam(required = false) String vrstaKredita, @RequestParam(required = false) String brojRacuna,@RequestParam(required = false) String loanStatus,@RequestParam(defaultValue = "0") @Min(value = 0) int page, @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
     {
-        return null;
+        Status status;
+        try {
+            status=Status.valueOf(loanStatus);
+        }
+        catch (Exception e)
+        {
+            throw new IllegalArgumentException("Los loanStatus");
+        }
+        return new ResponseEntity<>(loanService.findAllLoans(jwt,vrstaKredita,brojRacuna,status,page,size),HttpStatus.OK);
     }
 }

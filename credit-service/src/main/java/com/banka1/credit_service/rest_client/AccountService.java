@@ -1,5 +1,6 @@
 package com.banka1.credit_service.rest_client;
 
+import com.banka1.credit_service.dto.request.BankPaymentDto;
 import com.banka1.credit_service.dto.request.PaymentDto;
 import com.banka1.credit_service.dto.response.AccountDetailsResponseDto;
 import com.banka1.credit_service.dto.response.InfoResponseDto;
@@ -39,6 +40,14 @@ public class AccountService {
     public UpdatedBalanceResponseDto transaction(PaymentDto paymentDto) {
         return restClient.post()
                 .uri("/internal/accounts/transaction")
+                .body(paymentDto)
+                .retrieve()
+                .body(UpdatedBalanceResponseDto.class);
+    }
+
+    public UpdatedBalanceResponseDto transactionFromBank(BankPaymentDto paymentDto) {
+        return restClient.post()
+                .uri("/internal/accounts/transactionFromBank")
                 .body(paymentDto)
                 .retrieve()
                 .body(UpdatedBalanceResponseDto.class);
