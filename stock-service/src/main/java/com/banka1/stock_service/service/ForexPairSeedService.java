@@ -31,7 +31,6 @@ public class ForexPairSeedService {
 
     private static final String SOURCE = "built-in supported forex pairs";
     private static final String DEFAULT_FOREX_EXCHANGE_MIC = "XNAS";
-    private static final LocalDateTime SEEDED_LAST_REFRESH = LocalDateTime.of(2026, 4, 8, 12, 0);
     private static final BigDecimal ZERO_RATE = new BigDecimal("0.00000000");
     private static final long ZERO_VOLUME = 0L;
 
@@ -139,7 +138,7 @@ public class ForexPairSeedService {
         listing.setStockExchange(stockExchange);
         listing.setTicker(forexPair.getTicker());
         listing.setName(buildListingName(forexPair.getBaseCurrency(), forexPair.getQuoteCurrency()));
-        listing.setLastRefresh(SEEDED_LAST_REFRESH);
+        listing.setLastRefresh(LocalDateTime.now());
         listing.setPrice(forexPair.getExchangeRate());
         listing.setAsk(forexPair.getExchangeRate());
         listing.setBid(forexPair.getExchangeRate());

@@ -10,20 +10,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ForexPairTest {
 
     @Test
-    void shouldReturnFixedContractSizeAndDerivedValuesFromExchangeRate() {
+    void shouldReturnFixedContractSizeAndDerivedValuesFromPrice() {
         ForexPair forexPair = new ForexPair();
-        forexPair.setExchangeRate(new BigDecimal("1.08350"));
+        BigDecimal price = new BigDecimal("1.08350");
 
         assertEquals(1_000, forexPair.getContractSize());
-        assertEquals(new BigDecimal("1083.50000"), forexPair.calculateNominalValue());
-        assertEquals(new BigDecimal("108.3500000"), forexPair.calculateMaintenanceMargin());
+        assertEquals(new BigDecimal("1083.50000"), forexPair.calculateNominalValue(price));
+        assertEquals(new BigDecimal("108.3500000"), forexPair.calculateMaintenanceMargin(price));
     }
 
     @Test
-    void shouldRejectNullExchangeRateWhenCalculatingDerivedValues() {
+    void shouldRejectNullPriceWhenCalculatingDerivedValues() {
         ForexPair forexPair = new ForexPair();
 
-        assertThrows(NullPointerException.class, forexPair::calculateNominalValue);
-        assertThrows(NullPointerException.class, forexPair::calculateMaintenanceMargin);
+        assertThrows(NullPointerException.class, () -> forexPair.calculateNominalValue(null));
+        assertThrows(NullPointerException.class, () -> forexPair.calculateMaintenanceMargin(null));
     }
 }

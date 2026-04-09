@@ -38,7 +38,6 @@ public class StockTickerSeedService {
 
     private static final String SOURCE = "built-in starter stock tickers";
     private static final String DEFAULT_STOCK_EXCHANGE_MIC = "XNAS";
-    private static final LocalDateTime SEEDED_LAST_REFRESH = LocalDateTime.of(2026, 4, 8, 12, 0);
     private static final BigDecimal ZERO_PRICE = new BigDecimal("0.00000000");
     private static final BigDecimal ZERO_DIVIDEND_YIELD = new BigDecimal("0.0000");
     private static final long ZERO_OUTSTANDING_SHARES = 0L;
@@ -142,7 +141,7 @@ public class StockTickerSeedService {
         listing.setStockExchange(stockExchange);
         listing.setTicker(stock.getTicker());
         listing.setName(stock.getName());
-        listing.setLastRefresh(SEEDED_LAST_REFRESH);
+        listing.setLastRefresh(LocalDateTime.now());
         listing.setPrice(ZERO_PRICE);
         listing.setAsk(ZERO_PRICE);
         listing.setBid(ZERO_PRICE);

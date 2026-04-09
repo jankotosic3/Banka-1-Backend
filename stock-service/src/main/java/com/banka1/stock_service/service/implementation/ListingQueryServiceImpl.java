@@ -189,7 +189,7 @@ public class ListingQueryServiceImpl implements ListingQueryService {
         return listings.stream()
                 .map(listing -> {
                     ForexPair pair = requireUnderlyingSecurity(pairsById, listing, "forex pair");
-                    BigDecimal maintenanceMargin = pair.calculateMaintenanceMargin();
+                    BigDecimal maintenanceMargin = pair.calculateMaintenanceMargin(listing.getPrice());
                     return new ListingCatalogRow(
                             listing,
                             maintenanceMargin,
@@ -290,7 +290,7 @@ public class ListingQueryServiceImpl implements ListingQueryService {
 
         return createDetailsResponse(
                 listing,
-                listing.calculateInitialMarginCost(pair.calculateMaintenanceMargin()),
+                listing.calculateInitialMarginCost(pair.calculateMaintenanceMargin(listing.getPrice())),
                 period,
                 priceHistory,
                 null,

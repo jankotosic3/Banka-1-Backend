@@ -125,10 +125,12 @@ public class ListingMarketDataRefreshServiceImpl implements ListingMarketDataRef
         } else if (listing.getListingType() == ListingType.FOREX) {
             dailySnapshotDate = refreshForexListing(listing, refreshTimestamp);
         } else {
+            // Futures use static seed data only — there is no live market-data provider
+            // for futures in this service. This is an expected, intentional limitation,
+            // not a malformed request, so 422 Unprocessable Entity is more accurate than 400.
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Listing type %s is not supported for market-data refresh."
-                            .formatted(listing.getListingType())
+                    HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Futures market data refresh is not supported — futures use static seed data."
             );
         }
 

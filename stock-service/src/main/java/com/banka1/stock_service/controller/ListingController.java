@@ -7,6 +7,7 @@ import com.banka1.stock_service.dto.ListingDetailsResponse;
 import com.banka1.stock_service.dto.ListingRefreshResponse;
 import com.banka1.stock_service.dto.ListingSortField;
 import com.banka1.stock_service.dto.ListingSummaryResponse;
+import com.banka1.stock_service.repository.ListingRepository;
 import com.banka1.stock_service.service.ListingMarketDataRefreshService;
 import com.banka1.stock_service.service.ListingQueryService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.FORBIDDEN;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 /**
  * Listing API for listing-catalog queries and manual market-data refresh operations.
@@ -35,6 +37,7 @@ public class ListingController {
 
     private final ListingMarketDataRefreshService listingMarketDataRefreshService;
     private final ListingQueryService listingQueryService;
+    private final ListingRepository listingRepository;
 
     /**
      * Returns one detailed listing view with type-specific fields and historical prices.
@@ -50,8 +53,13 @@ public class ListingController {
             @RequestParam ListingDetailsPeriod period,
             Authentication authentication
     ) {
+        // Guard: resolve listing type cheaply before triggering full DB work, so that
+        // unauthorized forex access is rejected before any heavy query executes.
+        ListingType listingType = listingRepository.findListingTypeById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Listing with id %s was not found.".formatted(id)));
+        rejectUnauthorizedForexAccessByType(listingType, authentication);
+
         ListingDetailsResponse response = listingQueryService.getListingDetails(id, period);
-        rejectUnauthorizedForexAccess(response, authentication);
         return ResponseEntity.ok(response);
     }
 
@@ -172,12 +180,13 @@ public class ListingController {
 
     /**
      * Keeps FX detail access aligned with the existing FX catalog authorization rules.
+     * Called before the full DB fetch so that unauthorized callers are rejected cheaply.
      *
-     * @param response resolved listing details
+     * @param listingType listing type resolved from a lightweight repository query
      * @param authentication caller authentication
      */
-    private void rejectUnauthorizedForexAccess(ListingDetailsResponse response, Authentication authentication) {
-        if (response.listingType() != ListingType.FOREX) {
+    private void rejectUnauthorizedForexAccessByType(ListingType listingType, Authentication authentication) {
+        if (listingType != ListingType.FOREX) {
             return;
         }
 

@@ -93,28 +93,41 @@ public class ForexPair {
     }
 
     /**
-     * Derives nominal value as {@code contractSize * exchangeRate}.
+     * Derives nominal value as {@code contractSize * price}.
+     *
+     * <p>The {@code price} parameter matches the pattern used by {@code Stock} and
+     * {@code FuturesContract} so the caller always passes the current listing price
+     * rather than relying on the potentially-stale {@code exchangeRate} field.
      *
      * <p>Example:
-     * if {@code contractSize = 1000} and {@code exchangeRate = 1.08350},
+     * if {@code contractSize = 1000} and {@code price = 1.08350},
      * the derived nominal value is {@code 1083.50000}.
      *
+     * @param price current market price of the listing
      * @return derived nominal value
      */
-    public BigDecimal calculateNominalValue() {
-        return BigDecimal.valueOf(CONTRACT_SIZE).multiply(requireExchangeRate());
+    public BigDecimal calculateNominalValue(BigDecimal price) {
+        return BigDecimal.valueOf(CONTRACT_SIZE).multiply(requirePrice(price));
     }
 
     /**
-     * Derives maintenance margin as {@code contractSize * exchangeRate * 10%}.
+     * Derives maintenance margin as {@code contractSize * price * 10%}.
      *
+     * <p>Accepts the listing price as a parameter (matching the pattern of
+     * {@code Stock.calculateMaintenanceMargin(BigDecimal)} and
+     * {@code FuturesContract.calculateMaintenanceMargin(BigDecimal)}) so that the
+     * most recent {@code listing.price} is used instead of the potentially-stale
+     * {@code exchangeRate} field — the two values diverge during the update window
+     * and are both zero during initial seed, which caused {@code initialMarginCost = 0}.
+     *
+     * @param price current market price of the listing
      * @return derived maintenance margin
      */
-    public BigDecimal calculateMaintenanceMargin() {
-        return calculateNominalValue().multiply(MAINTENANCE_MARGIN_RATE);
+    public BigDecimal calculateMaintenanceMargin(BigDecimal price) {
+        return calculateNominalValue(price).multiply(MAINTENANCE_MARGIN_RATE);
     }
 
-    private BigDecimal requireExchangeRate() {
-        return Objects.requireNonNull(exchangeRate, "exchangeRate must not be null");
+    private BigDecimal requirePrice(BigDecimal price) {
+        return Objects.requireNonNull(price, "price must not be null");
     }
 }

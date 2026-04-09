@@ -6,8 +6,10 @@ import com.banka1.stock_service.domain.ListingType;
 import com.banka1.stock_service.dto.ListingRefreshBatchResponse;
 import com.banka1.stock_service.dto.StockExchangeStatusResponse;
 import com.banka1.stock_service.repository.ListingRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -43,6 +45,14 @@ public class ListingMarketDataScheduler {
     private final ListingMarketDataRefreshService listingMarketDataRefreshService;
     private final ListingRefreshProperties listingRefreshProperties;
     private final Clock clock;
+
+    /**
+     * Delay in milliseconds between consecutive API calls in the scheduler loop.
+     * Defaults to 12 000 ms (12 seconds), which is safe for the Alpha Vantage free-tier
+     * limit of 5 calls per minute. Set to 0 to disable throttling (e.g. in integration tests).
+     */
+    @Value("${stock.alpha-vantage.request-delay-ms:12000}")
+    private long requestDelayMs;
 
     /**
      * Creates the production scheduler using the system UTC clock.
@@ -92,6 +102,19 @@ public class ListingMarketDataScheduler {
     }
 
     /**
+     * Logs a one-time warning at startup to make it explicit that futures listings use static
+     * seed data and will not be refreshed by the scheduler or the manual refresh endpoint.
+     */
+    @PostConstruct
+    public void warnFuturesStaticData() {
+        log.warn(
+                "Futures listings use static CSV seed data and will NOT be refreshed by the scheduler. "
+                        + "Futures market data refresh is intentionally unsupported — "
+                        + "update the seed CSV and re-deploy to change futures data."
+        );
+    }
+
+    /**
      * Runs one scheduled refresh pass using the configured fixed delay.
      */
     @Scheduled(fixedDelayString = "${stock.listing-refresh.interval-ms:900000}")
@@ -103,7 +126,7 @@ public class ListingMarketDataScheduler {
         ListingRefreshBatchResponse response = refreshOpenListings();
         log.info(
                 "Scheduled listing refresh completed. processedListings={}, refreshedCount={}, "
-                        + "skippedClosedCount={}, skippedUnsupportedCount={}, failedCount={}",
+                        + "skippedClosedCount={}, skippedStaticDataCount={}, failedCount={}",
                 response.processedListings(),
                 response.refreshedCount(),
                 response.skippedClosedCount(),
@@ -152,6 +175,20 @@ public class ListingMarketDataScheduler {
                         listing.getTicker(),
                         exception.getReason()
                 );
+            }
+
+            // Throttle API calls to stay within the Alpha Vantage free-tier rate limit
+            // (5 calls/minute). The delay is applied after every provider-backed listing
+            // regardless of success or failure. Configurable via
+            // stock.alpha-vantage.request-delay-ms; set to 0 to disable.
+            if (requestDelayMs > 0) {
+                try {
+                    Thread.sleep(requestDelayMs);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Scheduler throttle sleep interrupted — aborting batch.");
+                    break;
+                }
             }
         }
 
@@ -214,8 +251,13 @@ public class ListingMarketDataScheduler {
     /**
      * Returns whether the current scheduler implementation supports refreshing one listing type.
      *
+     * <p>FUTURES deliberately returns {@code false} because there is no live market-data provider
+     * mapping for futures contracts in this service. Futures data is seeded once at startup from a
+     * static CSV file and is never updated at runtime. This is an intentional design decision, not
+     * a gap to be silently skipped — see {@link #warnFuturesStaticData()} for the startup notice.
+     *
      * @param listingType listing category
-     * @return {@code true} for provider-backed listing categories
+     * @return {@code true} for provider-backed listing categories (STOCK and FOREX only)
      */
     private boolean supportsRefresh(ListingType listingType) {
         return listingType == ListingType.STOCK || listingType == ListingType.FOREX;
