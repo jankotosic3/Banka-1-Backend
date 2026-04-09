@@ -15,6 +15,7 @@ on:
       - 'notification-service/**'
       - 'verification-service/**'
       - 'exchange-service/**'
+      - 'stock-service/**'
   pull_request:
     branches: [main, dev]
     paths:
@@ -26,6 +27,7 @@ on:
       - 'security-lib/**'
       - 'verification-service/**'
       - 'exchange-service/**'
+      - 'stock-service/**'
 
 jobs:
 
@@ -59,6 +61,8 @@ jobs:
               - 'verification-service/**'
             exchange-service:
               - 'exchange-service/**'
+            stock-service:
+              - 'stock-service/**'
 
   # ── Build & Test ──────────────────────────────────────────────────────────
   build-and-test:
