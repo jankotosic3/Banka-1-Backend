@@ -119,12 +119,24 @@ public class AccountServiceImplementation implements AccountService {
     }
 
     @Override
-    public UpdatedBalanceResponseDto transactionFromBank(BankPaymentDto paymentDto) {
-        Account to=validate(paymentDto.getToAccountNumber());
-        Account bankTarget=validateBank(to);
+    public void transactionFromBank(BankPaymentDto paymentDto) {
+        if(paymentDto.getFromAccountNumber()==null && paymentDto.getToAccountNumber()==null)
+            throw new IllegalArgumentException("Los unos");
+        Account sender;
+        Account recipient;
+        if(paymentDto.getFromAccountNumber()==null) {
+            recipient = validate(paymentDto.getToAccountNumber());
+            sender = validateBank(recipient);
+        }
+        else
+        {
+            sender = validate(paymentDto.getFromAccountNumber());
+            recipient = validateBank(sender);
+        }
         for(int i = 0; true; i++) {
             try {
-                return transactionalService.transfer(bankTarget,to,paymentDto);
+                transactionalService.transfer(sender,recipient,paymentDto);
+                return;
             } catch (ObjectOptimisticLockingFailureException | OptimisticLockException optimisticLockException) {
                 if(i>=2)
                     throw optimisticLockException;

@@ -104,10 +104,10 @@ public class TransactionalServiceImplementation implements TransactionalService 
     }
 
     @Override
-    public UpdatedBalanceResponseDto transfer(Account bankTarget, Account to, BankPaymentDto paymentDto) {
-        debit(bankTarget, paymentDto.getAmount());
-        credit(to, paymentDto.getAmount());
-        return new UpdatedBalanceResponseDto(null,to.getStanje());
+    public void transfer(Account sender, Account recipient, BankPaymentDto paymentDto) {
+        debit(sender, paymentDto.getAmount());
+        credit(recipient, paymentDto.getAmount());
+        //return new UpdatedBalanceResponseDto(null,null);
     }
 
 

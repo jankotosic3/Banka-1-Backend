@@ -58,8 +58,9 @@ public class AccountController {
 
 
     @PostMapping("/transactionFromBank")
-    public ResponseEntity<UpdatedBalanceResponseDto> transactionFromBank(@AuthenticationPrincipal Jwt jwt, @RequestBody @Valid BankPaymentDto bankPaymentDto) {
-        return new ResponseEntity<>(accountService.transactionFromBank(bankPaymentDto),HttpStatus.OK);
+    public ResponseEntity<Void> transactionFromBank(@AuthenticationPrincipal Jwt jwt, @RequestBody @Valid BankPaymentDto bankPaymentDto) {
+        accountService.transactionFromBank(bankPaymentDto);
+        return new ResponseEntity<>(HttpStatus.OK);
     }
 
     @GetMapping("/id/{accountId}/details")

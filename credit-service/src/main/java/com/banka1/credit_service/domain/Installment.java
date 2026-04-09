@@ -24,7 +24,7 @@ import java.time.LocalDate;
 @Setter
 public class Installment extends BaseEntity{
     //todo proveriti da li lazy
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @ManyToOne(fetch = FetchType.EAGER, optional = false)
     @JoinColumn(name = "loan_id", nullable = false)
     private Loan loan;
     @Column(nullable = false)
@@ -41,6 +41,16 @@ public class Installment extends BaseEntity{
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private PaymentStatus paymentStatus;
+    @Column(nullable = false)
+    private int retry=0;
 
-
+    public Installment(Loan loan, BigDecimal installmentAmount, BigDecimal interestRateAtPayment, CurrencyCode currency, LocalDate expectedDueDate, LocalDate actualDueDate, PaymentStatus paymentStatus) {
+        this.loan = loan;
+        this.installmentAmount = installmentAmount;
+        this.interestRateAtPayment = interestRateAtPayment;
+        this.currency = currency;
+        this.expectedDueDate = expectedDueDate;
+        this.actualDueDate = actualDueDate;
+        this.paymentStatus = paymentStatus;
+    }
 }

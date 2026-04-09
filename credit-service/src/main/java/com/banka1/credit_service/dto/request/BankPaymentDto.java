@@ -19,13 +19,9 @@ public class BankPaymentDto {
     /**
      * Broj računa na koji se novac prenosi (19 cifara).
      */
-    @NotBlank(message = "Unesi racun primaoca")
-    @Pattern(regexp = "^\\d{19}$", message = "Broj racuna mora imati 19 cifara")
+
+    private String fromAccountNumber;
     private String toAccountNumber;
-
-
-    @NotNull(message = "Unesi iznos")
-    @DecimalMin(value = "0.0", inclusive = false, message = "Iznos pre konverzije mora biti veci od 0")
     private BigDecimal amount;
 
 

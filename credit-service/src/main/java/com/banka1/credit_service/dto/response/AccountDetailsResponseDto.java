@@ -29,4 +29,6 @@ import lombok.Setter;
 public class AccountDetailsResponseDto {
     private Long ownerId;
     private CurrencyCode currency;
+    private String email;
+    private String username;
 }

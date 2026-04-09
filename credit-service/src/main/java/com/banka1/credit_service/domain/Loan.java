@@ -14,13 +14,13 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 @Entity
 @Table(name = "loan_table",
         indexes = {
         @Index(name = "idx_loan_account_number", columnList = "account_number")
 })
-@AllArgsConstructor
 @NoArgsConstructor
 @Getter
 @Setter
@@ -43,7 +43,7 @@ public class Loan extends BaseEntity{
     @Column(nullable = false)
     private BigDecimal amount;
     @Column(nullable = false)
-    private Integer repaymentMethod;
+    private Integer repaymentPeriod;
     @Column(nullable = false)
     private BigDecimal nominalInterestRate;
     @Column(nullable = false)
@@ -67,6 +67,19 @@ public class Loan extends BaseEntity{
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Status status;
+    @Column(nullable = false)
+    private String userEmail;
+    @Column(nullable = false)
+    private String username;
+    @Column(nullable = false)
+    private Long clientId;
+    @Column(nullable = false)
+    private int installmentCount=0;
+    @OneToMany(mappedBy = "loan", fetch = FetchType.LAZY)
+    private List<Installment> installments;
+
+
+
 
     //todo dodati listu installmenta ako mi treba
 

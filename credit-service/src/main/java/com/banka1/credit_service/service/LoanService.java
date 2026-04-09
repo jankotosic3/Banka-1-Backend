@@ -1,6 +1,7 @@
 package com.banka1.credit_service.service;
 
 import com.banka1.credit_service.domain.LoanRequest;
+import com.banka1.credit_service.domain.enums.LoanType;
 import com.banka1.credit_service.domain.enums.Status;
 import com.banka1.credit_service.dto.request.LoanRequestDto;
 import com.banka1.credit_service.dto.response.LoanInfoResponseDto;
@@ -18,7 +19,7 @@ public interface LoanService {
     String confirmation(Jwt jwt,Long id,Status status);
     Page<LoanResponseDto> find(Jwt jwt,int page,int size);
     LoanInfoResponseDto info(Jwt jwt,Long id);
-    Page<LoanRequest> findAllLoanRequest(Jwt jwt,String vrstaKredita,String brojRacuna,int page, int size);
-    Page<LoanResponseDto> findAllLoans(Jwt jwt, String vrstaKredita, String brojRacuna, Status status,int page,int size);
+    Page<LoanRequest> findAllLoanRequest(Jwt jwt, LoanType vrstaKredita, String brojRacuna, int page, int size);
+    Page<LoanResponseDto> findAllLoans(Jwt jwt, LoanType vrstaKredita, String brojRacuna, Status status,int page,int size);
 }
 

@@ -1,5 +1,6 @@
 package com.banka1.credit_service.dto.response;
 
+import com.banka1.credit_service.domain.Loan;
 import com.banka1.credit_service.domain.enums.InterestType;
 import com.banka1.credit_service.domain.enums.LoanType;
 import com.banka1.credit_service.domain.enums.Status;
@@ -40,4 +41,22 @@ public class LoanResponseDto {
         this.amount = amount;
         this.status = status;
     }
+    public LoanResponseDto(Loan loan)
+    {
+        this.loanNumber=loan.getId();
+        this.loanType=loan.getLoanType();
+        this.accountNumber=loan.getAccountNumber();
+        this.amount=loan.getAmount();
+        this.repaymentMethod=loan.getRepaymentPeriod();
+        this.nominalInterestRate=loan.getNominalInterestRate();
+        this.effectiveInterestRate=loan.getEffectiveInterestRate();
+        this.interestType=loan.getInterestType();
+        this.agreementDate=loan.getAgreementDate();
+        this.maturityDate=loan.getMaturityDate();
+        this.installmentAmount=loan.getInstallmentAmount();
+        this.nextInstallmentDate=loan.getNextInstallmentDate();
+        this.remainingDebt=loan.getRemainingDebt();
+        this.status=loan.getStatus();
+    }
+
 }

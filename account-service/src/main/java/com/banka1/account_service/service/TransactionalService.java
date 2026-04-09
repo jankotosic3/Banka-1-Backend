@@ -34,7 +34,7 @@ public interface TransactionalService {
     UpdatedBalanceResponseDto transfer(Account from, Account to, Account bankSender, Account bankTarget, PaymentDto paymentDto);
 
 
-    UpdatedBalanceResponseDto transfer(Account bankTarget, Account to, BankPaymentDto paymentDto);
+    void transfer(Account sender, Account recipient, BankPaymentDto paymentDto);
 
 
 }

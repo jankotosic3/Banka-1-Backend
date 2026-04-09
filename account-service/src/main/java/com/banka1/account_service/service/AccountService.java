@@ -25,7 +25,7 @@ public interface AccountService {
     UpdatedBalanceResponseDto transaction(PaymentDto paymentDto);
 
 
-    UpdatedBalanceResponseDto transactionFromBank(BankPaymentDto paymentDto);
+    void transactionFromBank(BankPaymentDto paymentDto);
 
     /**
      * Izvrsava transfer izmedju dva racuna istog vlasnika.
