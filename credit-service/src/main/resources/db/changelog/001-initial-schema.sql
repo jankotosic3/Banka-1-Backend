@@ -21,7 +21,7 @@ CREATE TABLE loan_request_table (
                                     account_number VARCHAR(50) NOT NULL,
                                     client_id BIGINT NOT NULL,
                                     status VARCHAR(50) NOT NULL,
-                                    userEmail VARCHAR(50) NOT NULL,
+                                    user_email VARCHAR(50) NOT NULL,
                                     username VARCHAR(50) NOT NULL
 );
 
@@ -49,10 +49,10 @@ CREATE TABLE loan_table (
                             remaining_debt DECIMAL(19,2) NOT NULL,
                             currency VARCHAR(10) NOT NULL,
                             status VARCHAR(50) NOT NULL,
-                            userEmail VARCHAR(50) NOT NULL,
+                            user_email VARCHAR(50) NOT NULL,
                             username VARCHAR(50) NOT NULL,
                             client_id BIGINT NOT NULL,
-                            installmentCount INTEGER NOT NULL
+                            installment_count INTEGER NOT NULL
 );
 
 -- =========================
