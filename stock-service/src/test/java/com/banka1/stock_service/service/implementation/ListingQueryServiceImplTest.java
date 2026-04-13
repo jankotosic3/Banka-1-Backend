@@ -333,6 +333,8 @@ class ListingQueryServiceImplTest {
     @Test
     void getListingDetailsReturnsNullChangePercentForSeededStockBeforeRefresh() {
         saveExchange("Nasdaq", "NASDAQ", "XNAS");
+        saveExchange("New York Portfolio Clearing", "NYPC", "NYPC");
+        saveExchange("Chicago Mercantile Exchange", "CME", "XCME");
 
         stockTickerSeedService.seedDefaultTickers();
 

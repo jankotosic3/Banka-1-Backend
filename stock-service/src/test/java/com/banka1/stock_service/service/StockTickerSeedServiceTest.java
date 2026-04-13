@@ -48,6 +48,8 @@ class StockTickerSeedServiceTest {
     @Test
     void seedDefaultTickersCreatesStocksAndListings() {
         saveExchange("Nasdaq", "NASDAQ", "XNAS");
+        saveExchange("New York Portfolio Clearing", "NYPC", "NYPC");
+        saveExchange("Chicago Mercantile Exchange", "CME", "XCME");
 
         StockTickerSeedResponse response = stockTickerSeedService.seedDefaultTickers();
 
@@ -56,12 +58,12 @@ class StockTickerSeedServiceTest {
                 .orElseThrow();
 
         assertThat(response.source()).isEqualTo("built-in starter stock tickers");
-        assertThat(response.processedRows()).isEqualTo(5);
-        assertThat(response.createdCount()).isEqualTo(5);
+        assertThat(response.processedRows()).isEqualTo(10);
+        assertThat(response.createdCount()).isEqualTo(10);
         assertThat(response.updatedCount()).isZero();
         assertThat(response.unchangedCount()).isZero();
-        assertThat(stockRepository.count()).isEqualTo(5);
-        assertThat(listingRepository.count()).isEqualTo(5);
+        assertThat(stockRepository.count()).isEqualTo(10);
+        assertThat(listingRepository.count()).isEqualTo(10);
 
         assertThat(apple.getName()).isEqualTo("Apple Inc.");
         assertThat(apple.getOutstandingShares()).isZero();
@@ -82,21 +84,25 @@ class StockTickerSeedServiceTest {
     @Test
     void seedDefaultTickersIsIdempotentOnRepeatedRuns() {
         saveExchange("Nasdaq", "NASDAQ", "XNAS");
+        saveExchange("New York Portfolio Clearing", "NYPC", "NYPC");
+        saveExchange("Chicago Mercantile Exchange", "CME", "XCME");
 
         stockTickerSeedService.seedDefaultTickers();
         StockTickerSeedResponse secondRun = stockTickerSeedService.seedDefaultTickers();
 
-        assertThat(secondRun.processedRows()).isEqualTo(5);
+        assertThat(secondRun.processedRows()).isEqualTo(10);
         assertThat(secondRun.createdCount()).isZero();
         assertThat(secondRun.updatedCount()).isZero();
-        assertThat(secondRun.unchangedCount()).isEqualTo(5);
-        assertThat(stockRepository.count()).isEqualTo(5);
-        assertThat(listingRepository.count()).isEqualTo(5);
+        assertThat(secondRun.unchangedCount()).isEqualTo(10);
+        assertThat(stockRepository.count()).isEqualTo(10);
+        assertThat(listingRepository.count()).isEqualTo(10);
     }
 
     @Test
     void seedDefaultTickersCreatesMissingListingWithoutOverwritingExistingStock() {
         saveExchange("Nasdaq", "NASDAQ", "XNAS");
+        saveExchange("New York Portfolio Clearing", "NYPC", "NYPC");
+        saveExchange("Chicago Mercantile Exchange", "CME", "XCME");
 
         Stock existingApple = new Stock();
         existingApple.setTicker("AAPL");
@@ -111,8 +117,8 @@ class StockTickerSeedServiceTest {
         Listing appleListing = listingRepository.findByListingTypeAndSecurityId(ListingType.STOCK, persistedApple.getId())
                 .orElseThrow();
 
-        assertThat(response.processedRows()).isEqualTo(5);
-        assertThat(response.createdCount()).isEqualTo(5);
+        assertThat(response.processedRows()).isEqualTo(10);
+        assertThat(response.createdCount()).isEqualTo(10);
         assertThat(response.updatedCount()).isZero();
         assertThat(response.unchangedCount()).isZero();
 
