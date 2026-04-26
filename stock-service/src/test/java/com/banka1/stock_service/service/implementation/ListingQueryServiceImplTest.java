@@ -138,7 +138,8 @@ class ListingQueryServiceImplTest {
         );
 
         ListingFilterRequest filteredRequest = new ListingFilterRequest();
-        filteredRequest.setSettlementDate(LocalDate.of(2026, 6, 15));
+        filteredRequest.setSettlementDateFrom(LocalDate.of(2026, 6, 15));
+        filteredRequest.setSettlementDateTo(LocalDate.of(2026, 6, 15));
 
         Page<ListingSummaryResponse> filteredResponse = listingQueryService.getFuturesListings(
                 filteredRequest,
@@ -332,6 +333,8 @@ class ListingQueryServiceImplTest {
     @Test
     void getListingDetailsReturnsNullChangePercentForSeededStockBeforeRefresh() {
         saveExchange("Nasdaq", "NASDAQ", "XNAS");
+        saveExchange("New York Portfolio Clearing", "NYPC", "NYPC");
+        saveExchange("Chicago Mercantile Exchange", "CME", "XCME");
 
         stockTickerSeedService.seedDefaultTickers();
 

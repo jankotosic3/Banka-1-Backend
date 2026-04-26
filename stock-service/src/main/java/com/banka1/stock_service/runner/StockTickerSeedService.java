@@ -37,17 +37,24 @@ import java.util.List;
 public class StockTickerSeedService {
 
     private static final String SOURCE = "built-in starter stock tickers";
-    private static final String DEFAULT_STOCK_EXCHANGE_MIC = "XNAS";
     private static final BigDecimal ZERO_PRICE = new BigDecimal("0.00000000");
     private static final BigDecimal ZERO_DIVIDEND_YIELD = new BigDecimal("0.0000");
     private static final long ZERO_OUTSTANDING_SHARES = 0L;
     private static final long ZERO_VOLUME = 0L;
     private static final List<SeededStockRow> DEFAULT_STOCKS = List.of(
-            new SeededStockRow("AAPL", "Apple Inc."),
-            new SeededStockRow("MSFT", "Microsoft Corporation"),
-            new SeededStockRow("GOOGL", "Alphabet Inc. Class A"),
-            new SeededStockRow("AMZN", "Amazon.com, Inc."),
-            new SeededStockRow("TSLA", "Tesla, Inc.")
+            // Nasdaq (XNAS)
+            new SeededStockRow("AAPL", "Apple Inc.", "XNAS"),
+            new SeededStockRow("MSFT", "Microsoft Corporation", "XNAS"),
+            new SeededStockRow("GOOGL", "Alphabet Inc. Class A", "XNAS"),
+            new SeededStockRow("AMZN", "Amazon.com, Inc.", "XNAS"),
+            new SeededStockRow("TSLA", "Tesla, Inc.", "XNAS"),
+            // New York Portfolio Clearing (NYPC) — exchange acronym and MIC start with "NY"
+            new SeededStockRow("IBM", "International Business Machines Corp.", "NYPC"),
+            new SeededStockRow("GS", "Goldman Sachs Group Inc.", "NYPC"),
+            new SeededStockRow("JPM", "JPMorgan Chase & Co.", "NYPC"),
+            // Chicago Mercantile Exchange (XCME)
+            new SeededStockRow("WMT", "Walmart Inc.", "XCME"),
+            new SeededStockRow("BAC", "Bank of America Corp.", "XCME")
     );
 
     private final StockRepository stockRepository;
@@ -71,17 +78,17 @@ public class StockTickerSeedService {
      */
     @Transactional
     public StockTickerSeedResponse seedDefaultTickers() {
-        StockExchange nasdaq = stockExchangeRepository.findByExchangeMICCode(DEFAULT_STOCK_EXCHANGE_MIC)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Stock exchange %s must exist before stock ticker seeding runs."
-                                .formatted(DEFAULT_STOCK_EXCHANGE_MIC)
-                ));
-
         int createdCount = 0;
         int unchangedCount = 0;
 
         for (SeededStockRow row : DEFAULT_STOCKS) {
             boolean rowCreated = false;
+
+            StockExchange exchange = stockExchangeRepository.findByExchangeMICCode(row.exchangeMicCode())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Stock exchange %s must exist before stock ticker seeding runs."
+                                    .formatted(row.exchangeMicCode())
+                    ));
 
             Stock stock = stockRepository.findByTicker(row.ticker()).orElse(null);
             if (stock == null) {
@@ -92,7 +99,7 @@ public class StockTickerSeedService {
             Listing listing = listingRepository.findByListingTypeAndSecurityId(ListingType.STOCK, stock.getId())
                     .orElse(null);
             if (listing == null) {
-                listingRepository.save(createListing(stock, nasdaq));
+                listingRepository.save(createListing(stock, exchange));
                 rowCreated = true;
             }
 
@@ -158,7 +165,8 @@ public class StockTickerSeedService {
      */
     private record SeededStockRow(
             String ticker,
-            String name
+            String name,
+            String exchangeMicCode
     ) {
     }
 }

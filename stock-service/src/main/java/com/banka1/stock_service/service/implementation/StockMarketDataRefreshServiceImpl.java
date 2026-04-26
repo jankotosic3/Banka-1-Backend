@@ -131,6 +131,16 @@ public class StockMarketDataRefreshServiceImpl implements StockMarketDataRefresh
      * @return summary of the completed refresh
      */
     @Override
+    public List<StockMarketDataRefreshResponse> refreshAllStocks() {
+        List<Stock> stocks = stockRepository.findAll();
+        List<StockMarketDataRefreshResponse> results = new ArrayList<>();
+        for (Stock stock : stocks) {
+            results.add(refreshStock(stock.getTicker()));
+        }
+        return results;
+    }
+
+    @Override
     @Transactional
     public StockMarketDataRefreshResponse refreshStock(String ticker) {
         String normalizedTicker = normalizeTicker(ticker);

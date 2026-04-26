@@ -186,14 +186,14 @@ public class CardManagementController {
      * Only employees may call this endpoint.
      * Allowed transition: BLOCKED {@code ->} ACTIVE.
      *
-     * @param cardNumber card number to unblock
+     * @param cardId card ID to unblock
      * @return 200 OK on success
      */
-    @PutMapping("/{cardNumber}/unblock")
-    @Operation(summary = "Unblock a card by card number")
+    @PutMapping("/id/{cardId}/unblock")
+    @Operation(summary = "Unblock a card by card ID")
     @PreAuthorize("hasRole('BASIC')")
-    public ResponseEntity<Void> unblockCard(@PathVariable String cardNumber) {
-        cardLifecycleService.unblockCard(cardNumber);
+    public ResponseEntity<Void> unblockCard(@PathVariable Long cardId) {
+        cardLifecycleService.unblockCard(cardId);
         return ResponseEntity.ok().build();
     }
 
@@ -203,14 +203,14 @@ public class CardManagementController {
      * Allowed transitions: ACTIVE {@code ->} DEACTIVATED or BLOCKED {@code ->} DEACTIVATED.
      * Deactivation is irreversible.
      *
-     * @param cardNumber card number to deactivate
+     * @param cardId card ID to deactivate
      * @return 200 OK on success
      */
-    @PutMapping("/{cardNumber}/deactivate")
-    @Operation(summary = "Deactivate a card by card number")
+    @PutMapping("/id/{cardId}/deactivate")
+    @Operation(summary = "Deactivate a card by card ID")
     @PreAuthorize("hasRole('BASIC')")
-    public ResponseEntity<Void> deactivateCard(@PathVariable String cardNumber) {
-        cardLifecycleService.deactivateCard(cardNumber);
+    public ResponseEntity<Void> deactivateCard(@PathVariable Long cardId) {
+        cardLifecycleService.deactivateCard(cardId);
         return ResponseEntity.ok().build();
     }
 

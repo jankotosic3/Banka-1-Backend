@@ -154,6 +154,26 @@ class CardManagementControllerWebMvcTest {
     }
 
     @Test
+    void unblockCardUsesCardIdEmployeeRoute() throws Exception {
+        mockMvc.perform(put("/id/15/unblock")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_BASIC"))
+                                .jwt(jwt -> jwt.claim("id", 100L))))
+                .andExpect(status().isOk());
+
+        verify(cardLifecycleService).unblockCard(15L);
+    }
+
+    @Test
+    void deactivateCardUsesCardIdEmployeeRoute() throws Exception {
+        mockMvc.perform(put("/id/15/deactivate")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_BASIC"))
+                                .jwt(jwt -> jwt.claim("id", 100L))))
+                .andExpect(status().isOk());
+
+        verify(cardLifecycleService).deactivateCard(15L);
+    }
+
+    @Test
     void updateCardLimitChecksClientOwnership() throws Exception {
         UpdateCardLimitDTO request = new UpdateCardLimitDTO();
         request.setCardLimit(BigDecimal.valueOf(2500));

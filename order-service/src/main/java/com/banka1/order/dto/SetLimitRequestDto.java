@@ -13,8 +13,8 @@ import java.math.BigDecimal;
 @Data
 public class SetLimitRequestDto {
 
-    /** New daily trading limit in RSD. Must be zero or positive. */
+    /** New daily trading limit in RSD. Must be greater than zero. */
     @NotNull
-    @DecimalMin(value = "0.0")
+    @DecimalMin(value = "0.0", inclusive = false)
     private BigDecimal limit;
 }

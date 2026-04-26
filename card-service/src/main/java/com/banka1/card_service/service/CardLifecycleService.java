@@ -71,18 +71,18 @@ public interface CardLifecycleService {
      * Unblocks a blocked card. Only employees may call this.
      * Allowed transition: BLOCKED -> ACTIVE.
      *
-     * @param cardNumber card number to unblock
+     * @param cardId card ID to unblock
      */
-    void unblockCard(String cardNumber);
+    void unblockCard(Long cardId);
 
     /**
      * Permanently deactivates a card. Only employees may call this.
      * Allowed transition: ACTIVE -> DEACTIVATED or BLOCKED -> DEACTIVATED.
      * Deactivation is irreversible - a deactivated card cannot be reactivated.
      *
-     * @param cardNumber card number to deactivate
+     * @param cardId card ID to deactivate
      */
-    void deactivateCard(String cardNumber);
+    void deactivateCard(Long cardId);
 
     /**
      * Updates the spending limit on an existing card identified by database ID.

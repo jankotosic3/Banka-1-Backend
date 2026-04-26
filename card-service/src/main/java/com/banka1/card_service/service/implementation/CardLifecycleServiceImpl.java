@@ -131,12 +131,12 @@ public class CardLifecycleServiceImpl implements CardLifecycleService {
      * Only employees may unblock a card.
      * Allowed transition: BLOCKED → ACTIVE.
      *
-     * @param cardNumber card number to unblock
+     * @param cardId card ID to unblock
      */
     @Override
     @Transactional
-    public void unblockCard(String cardNumber) {
-        Card card = findCardOrThrow(cardNumber);
+    public void unblockCard(Long cardId) {
+        Card card = findCardByIdOrThrow(cardId);
         transitionStatus(card, CardStatus.ACTIVE);
         cardRepository.save(card);
         registerAfterCommitNotification(card, CardNotificationType.CARD_UNBLOCKED);
@@ -148,12 +148,12 @@ public class CardLifecycleServiceImpl implements CardLifecycleService {
      * Deactivation is irreversible — once DEACTIVATED, no further transitions are allowed.
      * Allowed transitions: ACTIVE → DEACTIVATED or BLOCKED → DEACTIVATED.
      *
-     * @param cardNumber card number to deactivate
+     * @param cardId card ID to deactivate
      */
     @Override
     @Transactional
-    public void deactivateCard(String cardNumber) {
-        Card card = findCardOrThrow(cardNumber);
+    public void deactivateCard(Long cardId) {
+        Card card = findCardByIdOrThrow(cardId);
         transitionStatus(card, CardStatus.DEACTIVATED);
         cardRepository.save(card);
         registerAfterCommitNotification(card, CardNotificationType.CARD_DEACTIVATED);
@@ -202,21 +202,6 @@ public class CardLifecycleServiceImpl implements CardLifecycleService {
             );
         }
         card.setStatus(target);
-    }
-
-    /**
-     * Looks up a card by its card number or throws a {@link BusinessException} if not found.
-     *
-     * @param cardNumber card number to look up
-     * @return the matching card entity
-     * @throws BusinessException with {@link ErrorCode#CARD_NOT_FOUND} when no card matches
-     */
-    private Card findCardOrThrow(String cardNumber) {
-        return cardRepository.findByCardNumber(cardNumber)
-                .orElseThrow(() -> new BusinessException(
-                        ErrorCode.CARD_NOT_FOUND,
-                        "Card with number " + cardNumber + " was not found."
-                ));
     }
 
     /**

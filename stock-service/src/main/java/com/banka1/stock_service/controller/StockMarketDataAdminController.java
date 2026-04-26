@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * Administrative endpoints for manually refreshing stock market data from the external provider.
  */
@@ -31,5 +33,16 @@ public class StockMarketDataAdminController {
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
     public StockMarketDataRefreshResponse refreshStockMarketData(@PathVariable String ticker) {
         return stockMarketDataRefreshService.refreshStock(ticker);
+    }
+
+    /**
+     * Triggers a refresh for all persisted stock tickers.
+     *
+     * @return one result entry per stock, in the order they were processed
+     */
+    @PostMapping("/refresh-all")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERVISOR')")
+    public List<StockMarketDataRefreshResponse> refreshAllStocks() {
+        return stockMarketDataRefreshService.refreshAllStocks();
     }
 }

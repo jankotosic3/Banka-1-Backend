@@ -3,6 +3,7 @@ package com.banka1.stock_service.runner;
 import com.banka1.stock_service.config.ForexPairSeedProperties;
 import com.banka1.stock_service.config.FuturesContractSeedProperties;
 import com.banka1.stock_service.config.StockExchangeSeedProperties;
+import com.banka1.stock_service.config.StockOptionSeedProperties;
 import com.banka1.stock_service.config.StockTickerSeedProperties;
 import com.banka1.stock_service.dto.ForexPairImportResponse;
 import com.banka1.stock_service.dto.FuturesContractImportResponse;
@@ -29,10 +30,12 @@ public class SeedRunner implements ApplicationRunner {
     private final StockExchangeCsvImportService stockExchangeCsvImportService;
     private final FuturesContractCsvImportService futuresContractCsvImportService;
     private final StockTickerSeedService stockTickerSeedService;
+    private final StockOptionSeedService stockOptionSeedService;
     private final ForexPairSeedService forexPairSeedService;
     private final StockExchangeSeedProperties stockExchangeSeedProperties;
     private final FuturesContractSeedProperties futuresContractSeedProperties;
     private final StockTickerSeedProperties stockTickerSeedProperties;
+    private final StockOptionSeedProperties stockOptionSeedProperties;
     private final ForexPairSeedProperties forexPairSeedProperties;
 
     /**
@@ -69,6 +72,13 @@ public class SeedRunner implements ApplicationRunner {
             );
         } else {
             log.info("Starter stock ticker seeding is disabled.");
+        }
+
+        if (stockOptionSeedProperties.enabled()) {
+            int createdCount = stockOptionSeedService.seedDefaultOptions();
+            log.info("Stock options seeded from built-in starter stock options. createdCount={}", createdCount);
+        } else {
+            log.info("Stock option seeding is disabled.");
         }
 
         if (futuresContractSeedProperties.enabled()) {

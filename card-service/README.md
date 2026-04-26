@@ -404,6 +404,8 @@ Current management routes:
 - `GET /account/{accountNumber}` returns the same masked summaries for employee callers
 - `GET /id/{cardId}` returns the full card details, including the real `cardNumber`
 - `PUT /id/{cardId}/block` blocks the selected card without exposing the PAN in the route
+- `PUT /id/{cardId}/unblock` unblocks the selected card without exposing the PAN in the route
+- `PUT /id/{cardId}/deactivate` deactivates the selected card without exposing the PAN in the route
 - `PUT /id/{cardId}/limit` updates the selected card limit without exposing the PAN in the route
 - `GET /internal/account/{accountNumber}` is used by `account-service` and keeps card numbers masked
 
@@ -412,6 +414,7 @@ This means the normal client flow is:
 1. load the card list
 2. pick a card by `id`
 3. call `GET /id/{cardId}` to see the full card details
+4. call `PUT /id/{cardId}/block`, `PUT /id/{cardId}/unblock`, `PUT /id/{cardId}/deactivate`, or `PUT /id/{cardId}/limit`
 
 ## Running Locally
 

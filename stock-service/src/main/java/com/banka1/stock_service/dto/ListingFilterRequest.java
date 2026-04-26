@@ -70,8 +70,14 @@ public class ListingFilterRequest {
     private Long maxVolume;
 
     /**
-     * Exact futures settlement date filter.
+     * Inclusive lower bound for futures settlement date.
      */
     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-    private LocalDate settlementDate;
+    private LocalDate settlementDateFrom;
+
+    /**
+     * Inclusive upper bound for futures settlement date.
+     */
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate settlementDateTo;
 }

@@ -438,7 +438,7 @@ public class ListingQueryServiceImpl implements ListingQueryService {
                 .filter(row -> matchesRange(row.listing().getAsk(), filter.getMinAsk(), filter.getMaxAsk()))
                 .filter(row -> matchesRange(row.listing().getBid(), filter.getMinBid(), filter.getMaxBid()))
                 .filter(row -> matchesRange(row.listing().getVolume(), filter.getMinVolume(), filter.getMaxVolume()))
-                .filter(row -> matchesSettlementDate(row, filter.getSettlementDate()))
+                .filter(row -> matchesSettlementDate(row, filter.getSettlementDateFrom(), filter.getSettlementDateTo()))
                 .sorted(resolveComparator(sortField, sortDirection))
                 .toList();
 
@@ -553,11 +553,18 @@ public class ListingQueryServiceImpl implements ListingQueryService {
      * @param settlementDate requested settlement date
      * @return {@code true} when the filter matches or is absent
      */
-    private boolean matchesSettlementDate(ListingCatalogRow row, LocalDate settlementDate) {
-        if (settlementDate == null) {
-            return true;
+    private boolean matchesSettlementDate(ListingCatalogRow row, LocalDate from, LocalDate to) {
+        LocalDate date = row.settlementDate();
+        if (date == null) {
+            return from == null && to == null;
         }
-        return Objects.equals(row.settlementDate(), settlementDate);
+        if (from != null && date.isBefore(from)) {
+            return false;
+        }
+        if (to != null && date.isAfter(to)) {
+            return false;
+        }
+        return true;
     }
 
     /**

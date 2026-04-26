@@ -153,12 +153,12 @@ class CardLifecycleServiceImplTest {
     @Test
     void unblockCard_blockedCard_transitionsToActive() {
         Card card = cardWithStatus(CardStatus.BLOCKED);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
         when(cardRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(accountService.getNotificationContext("265000000000123456")).thenReturn(personalAccount());
         when(clientService.getNotificationRecipient(1L)).thenReturn(recipient());
 
-        service.unblockCard("1234");
+        service.unblockCard(15L);
 
         assertEquals(CardStatus.ACTIVE, card.getStatus());
         verify(cardRepository).save(card);
@@ -170,18 +170,18 @@ class CardLifecycleServiceImplTest {
     @Test
     void unblockCard_activeCard_throwsBusinessException() {
         Card card = cardWithStatus(CardStatus.ACTIVE);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
 
-        assertThrows(BusinessException.class, () -> service.unblockCard("1234"));
+        assertThrows(BusinessException.class, () -> service.unblockCard(15L));
         verify(cardRepository, never()).save(any());
     }
 
     @Test
     void unblockCard_deactivatedCard_throwsBusinessException() {
         Card card = cardWithStatus(CardStatus.DEACTIVATED);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
 
-        assertThrows(BusinessException.class, () -> service.unblockCard("1234"));
+        assertThrows(BusinessException.class, () -> service.unblockCard(15L));
         verify(cardRepository, never()).save(any());
     }
 
@@ -190,12 +190,12 @@ class CardLifecycleServiceImplTest {
     @Test
     void deactivateCard_activeCard_transitionsToDeactivated() {
         Card card = cardWithStatus(CardStatus.ACTIVE);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
         when(cardRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(accountService.getNotificationContext("265000000000123456")).thenReturn(personalAccount());
         when(clientService.getNotificationRecipient(1L)).thenReturn(recipient());
 
-        service.deactivateCard("1234");
+        service.deactivateCard(15L);
 
         assertEquals(CardStatus.DEACTIVATED, card.getStatus());
         verify(cardRepository).save(card);
@@ -207,12 +207,12 @@ class CardLifecycleServiceImplTest {
     @Test
     void deactivateCard_blockedCard_transitionsToDeactivated() {
         Card card = cardWithStatus(CardStatus.BLOCKED);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
         when(cardRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(accountService.getNotificationContext("265000000000123456")).thenReturn(personalAccount());
         when(clientService.getNotificationRecipient(1L)).thenReturn(recipient());
 
-        service.deactivateCard("1234");
+        service.deactivateCard(15L);
 
         assertEquals(CardStatus.DEACTIVATED, card.getStatus());
         verify(cardRepository).save(card);
@@ -221,10 +221,24 @@ class CardLifecycleServiceImplTest {
     @Test
     void deactivateCard_deactivatedCard_throwsBusinessException() {
         Card card = cardWithStatus(CardStatus.DEACTIVATED);
-        when(cardRepository.findByCardNumber("1234")).thenReturn(Optional.of(card));
+        when(cardRepository.findById(15L)).thenReturn(Optional.of(card));
 
-        assertThrows(BusinessException.class, () -> service.deactivateCard("1234"));
+        assertThrows(BusinessException.class, () -> service.deactivateCard(15L));
         verify(cardRepository, never()).save(any());
+    }
+
+    @Test
+    void unblockCard_cardNotFound_throwsBusinessException() {
+        when(cardRepository.findById(9999L)).thenReturn(Optional.empty());
+
+        assertThrows(BusinessException.class, () -> service.unblockCard(9999L));
+    }
+
+    @Test
+    void deactivateCard_cardNotFound_throwsBusinessException() {
+        when(cardRepository.findById(9999L)).thenReturn(Optional.empty());
+
+        assertThrows(BusinessException.class, () -> service.deactivateCard(9999L));
     }
 
     // --- updateCardLimit ---
