@@ -114,6 +114,7 @@ class OrderCreationServiceTest {
         buyRequest.setListingId(42L);
         buyRequest.setQuantity(10);
         buyRequest.setAccountId(5L);
+        buyRequest.setBankAccountId(null);
         buyRequest.setAllOrNone(false);
         buyRequest.setMargin(false);
 
@@ -217,7 +218,7 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING_CONFIRMATION);
         assertThat(response.getDirection()).isEqualTo(OrderDirection.BUY);
-        verify(accountClient, never()).transfer(any());
+        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
         verify(orderExecutionService, never()).executeOrderAsync(any());
     }
 
@@ -252,9 +253,99 @@ class OrderCreationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
         assertThat(response.getApprovedBy()).isNull();
-        verify(accountClient).getAccountDetails(999L);
+        verify(accountClient, times(2)).getAccountDetails(999L);
         verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
         verify(orderExecutionService, never()).executeOrderAsync(any());
+    }
+
+    @Test
+    void createBuyOrder_forActuaryWithExplicitBankAccountIdUsesSelectedBankAccount() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+
+        AccountDetailsDto selectedBankAccount = new AccountDetailsDto();
+        selectedBankAccount.setAccountNumber("BANK-USD-2");
+        selectedBankAccount.setCurrency("USD");
+        selectedBankAccount.setOwnerId(-1L);
+        when(accountClient.getAccountDetails(777L)).thenReturn(selectedBankAccount);
+        buyRequest.setBankAccountId(777L);
+
+        OrderResponse response = service.createBuyOrder(actuaryUser, buyRequest);
+
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING_CONFIRMATION);
+        assertThat(storedOrder.get().getAccountId()).isEqualTo(777L);
+        verify(accountClient).getAccountDetails(777L);
+    }
+
+    @Test
+    void confirmBuyOrder_forActuaryWithExplicitBankAccountIdUsesSelectedBankAccountForFunding() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        agent.setNeedApproval(false);
+        agent.setLimit(new BigDecimal("5000.00"));
+        agent.setUsedLimit(BigDecimal.ZERO);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+        when(actuaryInfoRepository.findByEmployeeIdForUpdate(2L)).thenReturn(Optional.of(agent));
+
+        AccountDetailsDto selectedBankAccount = new AccountDetailsDto();
+        selectedBankAccount.setAccountNumber("BANK-USD-2");
+        selectedBankAccount.setCurrency("USD");
+        selectedBankAccount.setOwnerId(-1L);
+        selectedBankAccount.setBalance(new BigDecimal("50000.00"));
+        when(accountClient.getAccountDetails(777L)).thenReturn(selectedBankAccount);
+        buyRequest.setBankAccountId(777L);
+
+        service.createBuyOrder(actuaryUser, buyRequest);
+        service.confirmOrder(actuaryUser, 100L);
+
+        assertThat(storedOrder.get().getAccountId()).isEqualTo(777L);
+
+        ArgumentCaptor<AccountTransactionRequest> captor = ArgumentCaptor.forClass(AccountTransactionRequest.class);
+        verify(accountClient).transfer(captor.capture());
+        assertThat(captor.getValue().getFromAccountId()).isEqualTo(777L);
+    }
+
+    @Test
+    void createBuyOrder_forActuaryWithoutBankAccountIdFallsBackToAutomaticBankAccount() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+
+        OrderResponse response = service.createBuyOrder(actuaryUser, buyRequest);
+
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING_CONFIRMATION);
+        assertThat(storedOrder.get().getAccountId()).isEqualTo(999L);
+        verify(accountClient, never()).getAccountDetails(999L);
+    }
+
+    @Test
+    void createBuyOrder_forClientIgnoresBankAccountIdAndKeepsClientAccountBehavior() {
+        buyRequest.setBankAccountId(777L);
+
+        OrderResponse response = service.createBuyOrder(clientUser, buyRequest);
+
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING_CONFIRMATION);
+        assertThat(storedOrder.get().getAccountId()).isEqualTo(5L);
+        verify(accountClient, never()).getAccountDetails(777L);
+    }
+
+    @Test
+    void createBuyOrder_forActuaryRejectsExplicitBankAccountWithWrongCurrency() {
+        ActuaryInfo agent = new ActuaryInfo();
+        agent.setEmployeeId(2L);
+        when(actuaryInfoRepository.findByEmployeeId(2L)).thenReturn(Optional.of(agent));
+
+        AccountDetailsDto selectedBankAccount = new AccountDetailsDto();
+        selectedBankAccount.setAccountNumber("BANK-EUR-2");
+        selectedBankAccount.setCurrency("EUR");
+        selectedBankAccount.setOwnerId(-1L);
+        when(accountClient.getAccountDetails(777L)).thenReturn(selectedBankAccount);
+        buyRequest.setBankAccountId(777L);
+
+        assertThatThrownBy(() -> service.createBuyOrder(actuaryUser, buyRequest))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Selected bank account currency does not match order currency");
     }
 
     @Test
@@ -305,7 +396,7 @@ class OrderCreationServiceTest {
         pendingOrder.setDirection(OrderDirection.BUY);
         pendingOrder.setRemainingPortions(10);
         pendingOrder.setStatus(OrderStatus.PENDING);
-        pendingOrder.setAccountId(5L);
+        pendingOrder.setAccountId(null);
         storedOrder.set(pendingOrder);
         when(orderRepository.findById(100L)).thenReturn(Optional.of(pendingOrder));
 
@@ -1008,6 +1099,33 @@ class OrderCreationServiceTest {
 
         assertThat(response.getContent()).hasSize(1);
         assertThat(response.getContent().getFirst().getOrderId()).isEqualTo(402L);
+    }
+
+    @Test
+    void getOrders_doneFilterReturnsOnlyDoneOrders() {
+        Order doneOrder = new Order();
+        doneOrder.setId(403L);
+        doneOrder.setUserId(2L);
+        doneOrder.setListingId(42L);
+        doneOrder.setOrderType(OrderType.MARKET);
+        doneOrder.setQuantity(1);
+        doneOrder.setContractSize(1);
+        doneOrder.setPricePerUnit(new BigDecimal("100.00"));
+        doneOrder.setDirection(OrderDirection.BUY);
+        doneOrder.setRemainingPortions(0);
+        doneOrder.setStatus(OrderStatus.DONE);
+        doneOrder.setIsDone(true);
+
+        ActuaryInfo actuaryInfo = new ActuaryInfo();
+        actuaryInfo.setEmployeeId(2L);
+        when(orderRepository.findByStatus(OrderStatus.DONE)).thenReturn(List.of(doneOrder));
+        when(actuaryInfoRepository.findByEmployeeIdIn(java.util.Set.of(2L))).thenReturn(List.of(actuaryInfo));
+
+        var response = service.getOrders(OrderOverviewStatusFilter.DONE, PageRequest.of(0, 100));
+
+        assertThat(response.getContent()).hasSize(1);
+        assertThat(response.getContent().getFirst().getOrderId()).isEqualTo(403L);
+        assertThat(response.getContent().getFirst().getStatus()).isEqualTo(OrderStatus.DONE);
     }
 
     @Test

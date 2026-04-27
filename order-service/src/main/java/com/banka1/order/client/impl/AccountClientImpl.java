@@ -62,6 +62,15 @@ public class AccountClientImpl implements AccountClient {
     }
 
     @Override
+    public UpdatedBalanceResponseDto transfer(PaymentDto payment) {
+        return accountRestClient.post()
+                .uri("/internal/accounts/transfer")
+                .body(payment)
+                .retrieve()
+                .body(UpdatedBalanceResponseDto.class);
+    }
+
+    @Override
     public UpdatedBalanceResponseDto transaction(PaymentDto payment) {
         return postTransaction(payment).body(UpdatedBalanceResponseDto.class);
     }

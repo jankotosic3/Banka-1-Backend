@@ -9,6 +9,7 @@ import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
+import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.entity.ActuaryInfo;
 import com.banka1.order.entity.Order;
 import com.banka1.order.entity.Portfolio;
@@ -38,6 +39,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -151,6 +153,7 @@ class OrderExecutionServiceTest {
         lenient().when(portfolioRepository.save(any(Portfolio.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().doNothing().when(accountClient).transfer(any(AccountTransactionRequest.class));
+        lenient().when(accountClient.transfer(any(PaymentDto.class))).thenReturn(null);
         lenient().when(accountClient.getAccountDetails(5L)).thenReturn(accountDetails);
         lenient().when(accountClient.getAccountDetails(999L)).thenReturn(accountDetails);
         lenient().when(exchangeClient.calculate("USD", "RSD", new BigDecimal("202.00"))).thenReturn(usdToRsd);
@@ -399,6 +402,148 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(order);
 
         verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+    }
+
+    @Test
+    void forexActuaryBuy_executesAsInternalCurrencySwapWithoutPortfolioMutation() {
+        order.setListingId(77L);
+        order.setContractSize(1_000);
+        order.setQuantity(1);
+        order.setRemainingPortions(1);
+        listing.setId(77L);
+        listing.setTicker("EUR/USD");
+        listing.setListingType(ListingType.FOREX);
+        listing.setCurrency("USD");
+        listing.setAsk(new BigDecimal("1.1000"));
+        listing.setBid(new BigDecimal("1.0900"));
+        listing.setPrice(new BigDecimal("1.1000"));
+        listing.setContractSize(1_000);
+        listing.setVolume(10L);
+
+        BankAccountDto usdBankAccount = new BankAccountDto();
+        usdBankAccount.setAccountId(999L);
+        BankAccountDto eurBankAccount = new BankAccountDto();
+        eurBankAccount.setAccountId(1001L);
+
+        AccountDetailsDto usdBankDetails = new AccountDetailsDto();
+        usdBankDetails.setAccountNumber("1111111111111111111");
+        usdBankDetails.setCurrency("USD");
+        usdBankDetails.setOwnerId(-1L);
+
+        AccountDetailsDto eurBankDetails = new AccountDetailsDto();
+        eurBankDetails.setAccountNumber("2222222222222222222");
+        eurBankDetails.setCurrency("EUR");
+        eurBankDetails.setOwnerId(-1L);
+
+        ExchangeRateDto forexExposure = new ExchangeRateDto();
+        forexExposure.setConvertedAmount(new BigDecimal("128700.00"));
+
+        when(stockClient.getListing(77L)).thenReturn(listing);
+        when(employeeClient.getBankAccount("USD")).thenReturn(usdBankAccount);
+        when(employeeClient.getBankAccount("EUR")).thenReturn(eurBankAccount);
+        when(accountClient.getAccountDetails(999L)).thenReturn(usdBankDetails);
+        when(accountClient.getAccountDetails(1001L)).thenReturn(eurBankDetails);
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.of(actuaryInfo));
+        when(actuaryInfoRepository.findByEmployeeIdForUpdate(1L)).thenReturn(Optional.of(actuaryInfo));
+        when(exchangeClient.calculateWithoutCommission("USD", "RSD", new BigDecimal("1100.00000000"))).thenReturn(forexExposure);
+
+        service.executeOrderPortion(order);
+
+        ArgumentCaptor<PaymentDto> paymentCaptor = ArgumentCaptor.forClass(PaymentDto.class);
+        verify(accountClient).transfer(paymentCaptor.capture());
+        assertThat(paymentCaptor.getValue().getFromAccountNumber()).isEqualTo("1111111111111111111");
+        assertThat(paymentCaptor.getValue().getToAccountNumber()).isEqualTo("2222222222222222222");
+        assertThat(paymentCaptor.getValue().getFromAmount()).isEqualByComparingTo("1100.00");
+        assertThat(paymentCaptor.getValue().getToAmount()).isEqualByComparingTo("1000");
+        ArgumentCaptor<Transaction> transactionCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(transactionCaptor.capture());
+        assertThat(transactionCaptor.getValue().getCommission()).isEqualByComparingTo("0");
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+        verify(exchangeClient, never()).calculateWithoutCommission("EUR", "USD", new BigDecimal("1000"));
+    }
+
+    @Test
+    void forexActuarySell_executesAsInternalCurrencySwapWithoutPortfolioMutation() {
+        order.setListingId(78L);
+        order.setDirection(OrderDirection.SELL);
+        order.setContractSize(1_000);
+        order.setQuantity(1);
+        order.setRemainingPortions(1);
+        listing.setId(78L);
+        listing.setTicker("EUR/USD");
+        listing.setListingType(ListingType.FOREX);
+        listing.setCurrency("USD");
+        listing.setAsk(new BigDecimal("1.1000"));
+        listing.setBid(new BigDecimal("1.0900"));
+        listing.setPrice(new BigDecimal("1.0900"));
+        listing.setContractSize(1_000);
+        listing.setVolume(10L);
+
+        BankAccountDto usdBankAccount = new BankAccountDto();
+        usdBankAccount.setAccountId(999L);
+        BankAccountDto eurBankAccount = new BankAccountDto();
+        eurBankAccount.setAccountId(1001L);
+
+        AccountDetailsDto usdBankDetails = new AccountDetailsDto();
+        usdBankDetails.setAccountNumber("1111111111111111111");
+        usdBankDetails.setCurrency("USD");
+        usdBankDetails.setOwnerId(-1L);
+
+        AccountDetailsDto eurBankDetails = new AccountDetailsDto();
+        eurBankDetails.setAccountNumber("2222222222222222222");
+        eurBankDetails.setCurrency("EUR");
+        eurBankDetails.setOwnerId(-1L);
+
+        ExchangeRateDto forexExposure = new ExchangeRateDto();
+        forexExposure.setConvertedAmount(new BigDecimal("127530.00"));
+
+        when(stockClient.getListing(78L)).thenReturn(listing);
+        when(employeeClient.getBankAccount("USD")).thenReturn(usdBankAccount);
+        when(employeeClient.getBankAccount("EUR")).thenReturn(eurBankAccount);
+        when(accountClient.getAccountDetails(999L)).thenReturn(usdBankDetails);
+        when(accountClient.getAccountDetails(1001L)).thenReturn(eurBankDetails);
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.of(actuaryInfo));
+        when(actuaryInfoRepository.findByEmployeeIdForUpdate(1L)).thenReturn(Optional.of(actuaryInfo));
+        when(exchangeClient.calculateWithoutCommission("USD", "RSD", new BigDecimal("1090.00000000"))).thenReturn(forexExposure);
+
+        service.executeOrderPortion(order);
+
+        ArgumentCaptor<PaymentDto> paymentCaptor = ArgumentCaptor.forClass(PaymentDto.class);
+        verify(accountClient).transfer(paymentCaptor.capture());
+        assertThat(paymentCaptor.getValue().getFromAccountNumber()).isEqualTo("2222222222222222222");
+        assertThat(paymentCaptor.getValue().getToAccountNumber()).isEqualTo("1111111111111111111");
+        assertThat(paymentCaptor.getValue().getFromAmount()).isEqualByComparingTo("1000");
+        assertThat(paymentCaptor.getValue().getToAmount()).isEqualByComparingTo("1090.00000000");
+        ArgumentCaptor<Transaction> transactionCaptor = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(transactionCaptor.capture());
+        assertThat(transactionCaptor.getValue().getCommission()).isEqualByComparingTo("0");
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
+    }
+
+    @Test
+    void forexNonActuary_isRejectedDuringExecution() {
+        order.setListingId(79L);
+        order.setContractSize(1_000);
+        order.setQuantity(1);
+        order.setRemainingPortions(1);
+        listing.setId(79L);
+        listing.setTicker("EUR/USD");
+        listing.setListingType(ListingType.FOREX);
+        listing.setCurrency("USD");
+        listing.setAsk(new BigDecimal("1.1000"));
+        listing.setBid(new BigDecimal("1.0900"));
+        listing.setPrice(new BigDecimal("1.1000"));
+        listing.setContractSize(1_000);
+        listing.setVolume(10L);
+
+        when(stockClient.getListing(79L)).thenReturn(listing);
+        when(actuaryInfoRepository.findByEmployeeId(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.executeOrderPortion(order))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("FOREX execution is supported only for actuary orders");
+
+        verify(portfolioRepository, never()).save(any(Portfolio.class));
     }
 
     @Test

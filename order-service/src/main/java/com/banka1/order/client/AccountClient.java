@@ -58,6 +58,14 @@ public interface AccountClient {
     void transfer(AccountTransactionRequest request);
 
     /**
+     * Performs a same-owner cross-currency transfer using explicit debit and credit amounts.
+     *
+     * @param payment payment request
+     * @return updated balances after the transfer
+     */
+    UpdatedBalanceResponseDto transfer(PaymentDto payment);
+
+    /**
      * Performs a legacy payment transaction used by the tax service.
      *
      * @param payment payment request
