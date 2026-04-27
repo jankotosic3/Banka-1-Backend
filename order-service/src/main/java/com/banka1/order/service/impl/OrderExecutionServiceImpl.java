@@ -155,20 +155,49 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         }
 
         int quantityToExecute = determineExecutionQuantity(managedOrder, executableCapacity);
+
         Optional<BigDecimal> executionPriceOpt = calculateExecutionPricePerUnit(managedOrder, listing);
         if (executionPriceOpt.isEmpty()) {
             return;
         }
-        BigDecimal executionPricePerUnit = executionPriceOpt.get();
-        BigDecimal grossChunkAmount = executionPricePerUnit
-                .multiply(BigDecimal.valueOf(managedOrder.getContractSize()))
-                .multiply(BigDecimal.valueOf(quantityToExecute));
-        BigDecimal commission = calculateCommission(orderPricingFamily(managedOrder.getOrderType()), grossChunkAmount, listing.getCurrency());
 
-        createTransaction(managedOrder, quantityToExecute, executionPricePerUnit, grossChunkAmount, commission);
-        updatePortfolio(managedOrder, listing, quantityToExecute, executionPricePerUnit);
-        transferFunds(managedOrder, listing.getCurrency(), grossChunkAmount);
-        finalizeActuaryExposure(managedOrder, listing.getCurrency(), grossChunkAmount);
+        BigDecimal executionPricePerUnit = executionPriceOpt.get();
+
+        ExecutionSettlement settlement = buildExecutionSettlement(
+                managedOrder,
+                listing,
+                quantityToExecute,
+                executionPricePerUnit
+        );
+
+        BigDecimal commission = listing.getListingType() == ListingType.FOREX
+                ? BigDecimal.ZERO
+                : calculateCommission(
+                        orderPricingFamily(managedOrder.getOrderType()),
+                        settlement.grossChunkAmount(),
+                        settlement.settlementCurrency()
+                );
+
+        createTransaction(
+                managedOrder,
+                quantityToExecute,
+                settlement.recordedPricePerUnit(),
+                settlement.grossChunkAmount(),
+                commission
+        );
+
+        if (listing.getListingType() != ListingType.FOREX) {
+            updatePortfolio(managedOrder, listing, quantityToExecute, settlement.recordedPricePerUnit());
+            transferFunds(managedOrder, settlement.settlementCurrency(), settlement.grossChunkAmount());
+        } else {
+            settleForexFunds(managedOrder, settlement.forexSettlement());
+        }
+
+        finalizeActuaryExposure(
+                managedOrder,
+                settlement.settlementCurrency(),
+                settlement.grossChunkAmount()
+        );
 
         managedOrder.setRemainingPortions(managedOrder.getRemainingPortions() - quantityToExecute);
         if (managedOrder.getRemainingPortions() == 0) {
@@ -300,6 +329,40 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         transactionRepository.save(transaction);
     }
 
+    private ExecutionSettlement buildExecutionSettlement(Order order, StockListingDto listing, int quantityToExecute,
+                                                         BigDecimal marketExecutionPricePerUnit) {
+        if (listing.getListingType() != ListingType.FOREX) {
+            BigDecimal grossChunkAmount = marketExecutionPricePerUnit
+                    .multiply(BigDecimal.valueOf(order.getContractSize()))
+                    .multiply(BigDecimal.valueOf(quantityToExecute));
+            return new ExecutionSettlement(marketExecutionPricePerUnit, grossChunkAmount, listing.getCurrency(), null);
+        }
+
+        ForexSettlement forexSettlement = buildForexSettlement(order, listing, quantityToExecute, marketExecutionPricePerUnit);
+        return new ExecutionSettlement(marketExecutionPricePerUnit, forexSettlement.quoteAmount(),
+                forexSettlement.quoteCurrency(), forexSettlement);
+    }
+
+    private ForexSettlement buildForexSettlement(Order order, StockListingDto listing, int quantityToExecute,
+                                                 BigDecimal executionPricePerUnit) {
+        if (actuaryInfoRepository.findByEmployeeId(order.getUserId()).isEmpty()) {
+            throw new IllegalStateException("FOREX execution is supported only for actuary orders");
+        }
+
+        ForexPairCurrencyPair pair = parseForexPair(listing);
+        BigDecimal baseAmount = BigDecimal.valueOf(order.getContractSize())
+                .multiply(BigDecimal.valueOf(quantityToExecute));
+        BigDecimal quoteAmount = baseAmount.multiply(executionPricePerUnit).setScale(8, RoundingMode.HALF_UP);
+        Long sourceAccountId = order.getDirection() == OrderDirection.BUY
+                ? employeeClient.getBankAccount(pair.quoteCurrency()).getAccountId()
+                : employeeClient.getBankAccount(pair.baseCurrency()).getAccountId();
+        Long destinationAccountId = order.getDirection() == OrderDirection.BUY
+                ? employeeClient.getBankAccount(pair.baseCurrency()).getAccountId()
+                : employeeClient.getBankAccount(pair.quoteCurrency()).getAccountId();
+        return new ForexSettlement(pair.baseCurrency(), pair.quoteCurrency(), baseAmount, quoteAmount,
+                sourceAccountId, destinationAccountId);
+    }
+
     private void updatePortfolio(Order order, StockListingDto listing, int quantity, BigDecimal executionPricePerUnit) {
         Portfolio portfolio = portfolioRepository.findByUserIdAndListingIdForUpdate(order.getUserId(), order.getListingId()).orElse(null);
 
@@ -351,6 +414,22 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         }
 
         transferWithoutConversionFee(bankAccount.getAccountId(), order.getAccountId(), amount, currency, "Order execution");
+    }
+
+    private void settleForexFunds(Order order, ForexSettlement settlement) {
+        AccountDetailsDto fromAccount = accountClient.getAccountDetails(settlement.sourceAccountId());
+        AccountDetailsDto toAccount = accountClient.getAccountDetails(settlement.destinationAccountId());
+        BigDecimal fromAmount = order.getDirection() == OrderDirection.BUY ? settlement.quoteAmount() : settlement.baseAmount();
+        BigDecimal toAmount = order.getDirection() == OrderDirection.BUY ? settlement.baseAmount() : settlement.quoteAmount();
+        PaymentDto payment = new PaymentDto(
+                fromAccount.getAccountNumber(),
+                toAccount.getAccountNumber(),
+                fromAmount,
+                toAmount,
+                BigDecimal.ZERO,
+                orderOwnerId(fromAccount)
+        );
+        accountClient.transfer(payment);
     }
 
     private void finalizeActuaryExposure(Order order, String currency, BigDecimal amount) {
@@ -462,5 +541,37 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
 
     private int defaultInteger(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private ForexPairCurrencyPair parseForexPair(StockListingDto listing) {
+        if (listing.getTicker() == null) {
+            throw new IllegalStateException("FOREX listing ticker is missing");
+        }
+        String[] parts = listing.getTicker().trim().toUpperCase().split("/");
+        if (parts.length != 2 || parts[0].length() != 3 || parts[1].length() != 3) {
+            throw new IllegalStateException("FOREX listing ticker must use BASE/QUOTE format");
+        }
+        return new ForexPairCurrencyPair(parts[0], parts[1]);
+    }
+
+    private record ExecutionSettlement(
+            BigDecimal recordedPricePerUnit,
+            BigDecimal grossChunkAmount,
+            String settlementCurrency,
+            ForexSettlement forexSettlement
+    ) {
+    }
+
+    private record ForexSettlement(
+            String baseCurrency,
+            String quoteCurrency,
+            BigDecimal baseAmount,
+            BigDecimal quoteAmount,
+            Long sourceAccountId,
+            Long destinationAccountId
+    ) {
+    }
+
+    private record ForexPairCurrencyPair(String baseCurrency, String quoteCurrency) {
     }
 }

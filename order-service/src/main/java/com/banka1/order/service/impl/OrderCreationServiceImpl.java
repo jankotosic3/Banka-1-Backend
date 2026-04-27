@@ -104,11 +104,12 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         StockListingDto listing = stockClient.getListing(request.getListingId());
         validateTradingAccess(user, listing);
         ExchangeWindow exchangeWindow = resolveExchangeWindow(listing);
-        Long accountId = initialBuyAccountId(user, request.getAccountId(), listing.getCurrency());
+        String settlementCurrency = settlementCurrency(listing);
+        Long accountId = initialBuyAccountId(user, request.getAccountId(), request.getBankAccountId(), settlementCurrency);
         OrderType orderType = determineOrderType(request.getLimitValue(), request.getStopValue());
         BigDecimal approximatePrice = calculateApproximatePrice(orderType, OrderDirection.BUY, listing, request.getQuantity(),
                 request.getLimitValue(), request.getStopValue());
-        BigDecimal fee = calculateFee(orderType, approximatePrice, listing.getCurrency());
+        BigDecimal fee = calculateFee(orderType, approximatePrice, listing);
 
         Order order = buildBaseOrder(user.userId(), request.getListingId(), orderType, request.getQuantity(), listing,
                 request.getLimitValue(), request.getStopValue(), OrderDirection.BUY, request.getAllOrNone(),
@@ -127,12 +128,15 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
         StockListingDto listing = stockClient.getListing(request.getListingId());
         validateTradingAccess(user, listing);
-        ensurePortfolioOwnership(user.userId(), request.getListingId(), request.getQuantity());
+        if (listing.getListingType() != ListingType.FOREX) {
+            ensurePortfolioOwnership(user.userId(), request.getListingId(), request.getQuantity());
+        }
         ExchangeWindow exchangeWindow = resolveExchangeWindow(listing);
+        String settlementCurrency = settlementCurrency(listing);
         OrderType orderType = determineOrderType(request.getLimitValue(), request.getStopValue());
         BigDecimal approximatePrice = calculateApproximatePrice(orderType, OrderDirection.SELL, listing, request.getQuantity(),
                 request.getLimitValue(), request.getStopValue());
-        BigDecimal fee = calculateFee(orderType, approximatePrice, listing.getCurrency());
+        BigDecimal fee = calculateFee(orderType, approximatePrice, listing);
 
         Order order = buildBaseOrder(user.userId(), request.getListingId(), orderType, request.getQuantity(), listing,
                 request.getLimitValue(), request.getStopValue(), OrderDirection.SELL, request.getAllOrNone(),
@@ -211,7 +215,8 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
-        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency());
+        String settlementCurrency = settlementCurrency(listing);
+        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing);
 
         if (hasPastSettlementDate(listing)) {
             order.setStatus(OrderStatus.DECLINED);
@@ -222,7 +227,9 @@ public class OrderCreationServiceImpl implements OrderCreationService {
             return mapToResponse(order, approximatePrice, fee, order.getExchangeClosed());
         }
 
-        Long fundingAccountId = determineFundingAccountId(user.userId(), order.getAccountId(), listing.getCurrency());
+        Long fundingAccountId = order.getDirection() == OrderDirection.BUY
+                ? resolveBuyFundingAccountId(user.userId(), order.getAccountId(), settlementCurrency)
+                : determineFundingAccountId(user.userId(), order.getAccountId(), settlementCurrency);
         if (order.getDirection() == OrderDirection.BUY && !user.isClient()) {
             order.setAccountId(fundingAccountId);
         }
@@ -231,10 +238,10 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         } else if (order.getDirection() == OrderDirection.BUY) {
             checkFunds(fundingAccountId, approximatePrice.add(fee));
         }
-        ApprovalReservationDecision decision = determineOrderStatusAndReserveExposure(user.userId(), approximatePrice, listing.getCurrency());
-        reserveSellQuantityIfNeeded(order);
+        ApprovalReservationDecision decision = determineOrderStatusAndReserveExposure(user.userId(), approximatePrice, settlementCurrency);
+        reserveSellQuantityIfNeeded(order, listing);
         if (decision.status() == OrderStatus.APPROVED) {
-            transferFee(user, fundingAccountId, fee, listing.getCurrency());
+            transferFee(user, fundingAccountId, fee, settlementCurrency);
         }
 
         order.setStatus(decision.status());
@@ -283,9 +290,12 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
-        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency());
-        Long fundingAccountId = determineFundingAccountId(order.getUserId(), order.getAccountId(), listing.getCurrency());
-        transferFee(order.getUserId(), fundingAccountId, fee, listing.getCurrency());
+        String settlementCurrency = settlementCurrency(listing);
+        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing);
+        Long fundingAccountId = order.getDirection() == OrderDirection.BUY
+                ? resolveBuyFundingAccountId(order.getUserId(), order.getAccountId(), settlementCurrency)
+                : determineFundingAccountId(order.getUserId(), order.getAccountId(), settlementCurrency);
+        transferFee(order.getUserId(), fundingAccountId, fee, settlementCurrency);
 
         if (order.getDirection() == OrderDirection.BUY && !Boolean.TRUE.equals(order.getMargin())) {
             checkFunds(fundingAccountId, approximatePrice);
@@ -312,7 +322,9 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         StockListingDto listing = stockClient.getListing(order.getListingId());
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
-        return mapToResponse(order, approximatePrice, calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()), order.getExchangeClosed());
+        return mapToResponse(order, approximatePrice,
+                calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing),
+                order.getExchangeClosed());
     }
 
     @Override
@@ -405,7 +417,8 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         BigDecimal approximatePrice = calculateApproximatePrice(order.getOrderType(), order.getDirection(), listing,
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
         return mapToResponse(order, approximatePrice,
-                calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency()), order.getExchangeClosed());
+                calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing),
+                order.getExchangeClosed());
     }
 
     private Order declinePendingOrder(Order order, Long approverId, boolean publishNotification) {
@@ -545,6 +558,13 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         }
     }
 
+    private BigDecimal calculateFee(OrderType orderType, BigDecimal approximatePrice, StockListingDto listing) {
+        if (listing.getListingType() == ListingType.FOREX) {
+            return BigDecimal.ZERO;
+        }
+        return calculateFee(orderType, approximatePrice, settlementCurrency(listing));
+    }
+
     private BigDecimal calculateFee(OrderType orderType, BigDecimal approximatePrice, String currency) {
         BigDecimal rate = isMarketFamily(orderType) ? new BigDecimal("0.14") : new BigDecimal("0.24");
         BigDecimal maxFeeUsd = isMarketFamily(orderType) ? new BigDecimal("7") : new BigDecimal("12");
@@ -570,6 +590,9 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     }
 
     private void transferFee(Long fundingAccountId, BigDecimal fee, String currency, boolean applyConversionFee) {
+        if (fee == null || fee.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
         BankAccountDto bankAccount = employeeClient.getBankAccount(currency);
         if (fundingAccountId != null && fundingAccountId.equals(bankAccount.getAccountId())) {
             return;
@@ -597,14 +620,35 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         return selectedAccountId;
     }
 
-    private Long initialBuyAccountId(AuthenticatedUser user, Long selectedAccountId, String currency) {
+    private Long initialBuyAccountId(AuthenticatedUser user, Long selectedAccountId, Long selectedBankAccountId, String currency) {
         if (user.isClient()) {
             if (selectedAccountId == null) {
                 throw new BadRequestException("Account is required for client buy orders");
             }
             return selectedAccountId;
         }
+        if (isActuaryUser(user.userId())) {
+            return resolveBuyFundingAccountId(user.userId(), selectedBankAccountId, currency);
+        }
         return determineFundingAccountId(user.userId(), selectedAccountId, currency);
+    }
+
+    private Long resolveBuyFundingAccountId(Long userId, Long selectedBankAccountId, String currency) {
+        if (!isActuaryUser(userId)) {
+            return determineFundingAccountId(userId, selectedBankAccountId, currency);
+        }
+        if (selectedBankAccountId == null) {
+            return employeeClient.getBankAccount(currency).getAccountId();
+        }
+        validateSelectedBankAccountCurrency(selectedBankAccountId, currency);
+        return selectedBankAccountId;
+    }
+
+    private void validateSelectedBankAccountCurrency(Long bankAccountId, String currency) {
+        AccountDetailsDto account = accountClient.getAccountDetails(bankAccountId);
+        if (account.getCurrency() == null || !account.getCurrency().equalsIgnoreCase(currency)) {
+            throw new BadRequestException("Selected bank account currency does not match order currency");
+        }
     }
 
     private BigDecimal convertAmount(String fromCurrency, String toCurrency, BigDecimal amount) {
@@ -712,7 +756,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         BigDecimal approximatePrice = order.getPricePerUnit()
                 .multiply(BigDecimal.valueOf(order.getContractSize()))
                 .multiply(BigDecimal.valueOf(order.getQuantity()));
-        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency());
+        BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing);
         return mapToResponse(order, approximatePrice, fee, order.getExchangeClosed());
     }
 
@@ -744,6 +788,9 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     }
 
     private void validateTradingAccess(AuthenticatedUser user, StockListingDto listing) {
+        if (listing.getListingType() == ListingType.FOREX && actuaryInfoRepository.findByEmployeeId(user.userId()).isEmpty()) {
+            throw new BusinessConflictException("FOREX orders are currently supported only for actuaries");
+        }
         if (!user.isClient()) {
             return;
         }
@@ -763,8 +810,26 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         return new ExchangeWindow(closed, afterHours);
     }
 
-    private void reserveSellQuantityIfNeeded(Order order) {
-        if (order.getDirection() != OrderDirection.SELL) {
+    private String settlementCurrency(StockListingDto listing) {
+        if (listing.getListingType() != ListingType.FOREX) {
+            return listing.getCurrency();
+        }
+        return parseForexPair(listing).quoteCurrency();
+    }
+
+    private ForexPairCurrencyPair parseForexPair(StockListingDto listing) {
+        if (listing.getTicker() == null) {
+            throw new BadRequestException("FOREX listing ticker is missing");
+        }
+        String[] parts = listing.getTicker().trim().toUpperCase().split("/");
+        if (parts.length != 2 || parts[0].length() != 3 || parts[1].length() != 3) {
+            throw new BadRequestException("FOREX listing ticker must use BASE/QUOTE format");
+        }
+        return new ForexPairCurrencyPair(parts[0], parts[1]);
+    }
+
+    private void reserveSellQuantityIfNeeded(Order order, StockListingDto listing) {
+        if (order.getDirection() != OrderDirection.SELL || listing.getListingType() == ListingType.FOREX) {
             return;
         }
         Portfolio portfolio = portfolioRepository.findByUserIdAndListingIdForUpdate(order.getUserId(), order.getListingId())
@@ -784,6 +849,10 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
     private void releaseSellReservation(Order order, int quantityToRelease) {
         if (order.getDirection() != OrderDirection.SELL || quantityToRelease <= 0) {
+            return;
+        }
+        StockListingDto listing = stockClient.getListing(order.getListingId());
+        if (listing.getListingType() == ListingType.FOREX) {
             return;
         }
         Portfolio portfolio = portfolioRepository.findByUserIdAndListingIdForUpdate(order.getUserId(), order.getListingId()).orElse(null);
@@ -869,9 +938,16 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         }
     }
 
+    private boolean isActuaryUser(Long userId) {
+        return actuaryInfoRepository.findByEmployeeId(userId).isPresent();
+    }
+
     private record ApprovalReservationDecision(OrderStatus status, BigDecimal reservedExposure) {
     }
 
     private record ExchangeWindow(boolean closed, boolean afterHours) {
+    }
+
+    private record ForexPairCurrencyPair(String baseCurrency, String quoteCurrency) {
     }
 }

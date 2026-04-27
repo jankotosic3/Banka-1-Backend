@@ -56,6 +56,11 @@ class LocalStubClientsConfig {
             }
 
             @Override
+            public UpdatedBalanceResponseDto transfer(PaymentDto payment) {
+                return null;
+            }
+
+            @Override
             public UpdatedBalanceResponseDto transaction(PaymentDto payment) {
                 return null;
             }
