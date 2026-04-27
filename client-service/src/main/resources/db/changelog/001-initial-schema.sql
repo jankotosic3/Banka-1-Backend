@@ -30,7 +30,7 @@ CREATE TABLE client_permissions (
 
                                       CONSTRAINT fk_zp_zaposlen
                                           FOREIGN KEY (client_id)
-                                              REFERENCES employees(id)
+                                              REFERENCES clients(id)
                                               ON DELETE CASCADE
 );
 
