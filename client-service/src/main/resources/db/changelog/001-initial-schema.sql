@@ -22,6 +22,20 @@ CREATE TABLE clients (
 );
 
 -- changeset client-service:2
+CREATE TABLE client_permissions (
+                                      client_id BIGINT NOT NULL,
+                                      permission VARCHAR(100) NOT NULL,
+
+                                      PRIMARY KEY (client_id, permission),
+
+                                      CONSTRAINT fk_zp_zaposlen
+                                          FOREIGN KEY (client_id)
+                                              REFERENCES employees(id)
+                                              ON DELETE CASCADE
+);
+
+
+-- changeset client-service:3
 -- Index za brzo pretrazivanje po imenu i prezimenu
 CREATE INDEX idx_clients_ime_prezime ON clients (ime, prezime);
 

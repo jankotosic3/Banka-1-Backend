@@ -52,6 +52,15 @@ public class ClientController {
         return new ResponseEntity<>(created, HttpStatus.CREATED);
     }
 
+
+    @PutMapping("/margin/{id}")
+    @PreAuthorize("hasRole('SERVICE')")
+    public ResponseEntity<Void> addMarginPermission(@AuthenticationPrincipal Jwt jwt,@PathVariable Long id){
+        clientService.addMarginPermission(id);
+        return new ResponseEntity<>(HttpStatus.OK);
+    }
+
+
     /**
      * Pretrazuje klijente po filterima (ime, prezime, email) uz paginaciju.
      * Rezultati su sortirani abecedno po prezimenu.

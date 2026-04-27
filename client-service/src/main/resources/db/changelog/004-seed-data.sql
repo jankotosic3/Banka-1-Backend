@@ -1,6 +1,6 @@
 -- liquibase formatted sql
 
--- changeset client-service:5
+-- changeset client-service:6
 -- password for all seed clients is 'client123'
 INSERT INTO clients (ime, prezime, datum_rodjenja, pol, email, broj_telefona, adresa, jmbg, password, role, version, deleted)
 VALUES

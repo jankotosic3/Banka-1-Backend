@@ -34,7 +34,11 @@ public enum Permission {
     FUND_AGENT_MANAGE("upravljanje fondovima i agentima"),
 
     /** Administrativno upravljanje svim zaposlenima. */
-    EMPLOYEE_MANAGE_ALL("upravlja svim zaposlenima");
+    EMPLOYEE_MANAGE_ALL("upravlja svim zaposlenima"),
+
+    MARGIN_TRADE("trgovina sa marginom");
+
+
 
     /** Citljiv opis permisije na srpskom jeziku. */
     private final String description;

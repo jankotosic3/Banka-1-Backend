@@ -15,6 +15,7 @@ import com.banka1.credit_service.repository.InstallmentRepository;
 import com.banka1.credit_service.repository.LoanRepository;
 import com.banka1.credit_service.repository.LoanRequestRepository;
 import com.banka1.credit_service.rest_client.AccountService;
+import com.banka1.credit_service.rest_client.ClientService;
 import com.banka1.credit_service.rest_client.ExchangeService;
 import com.banka1.credit_service.service.LoanService;
 import lombok.RequiredArgsConstructor;
@@ -50,8 +51,10 @@ public class LoanServiceImplementation implements LoanService {
     private final LoanRequestRepository loanRequestRepository;
     private final InstallmentRepository installmentRepository;
     private final LoanRepository loanRepository;
-
     private final RabbitClient rabbitClient;
+
+    private final ClientService clientService;
+
 
     @Value("${banka.security.id}")
     private String appPropertiesId;
@@ -186,6 +189,7 @@ public class LoanServiceImplementation implements LoanService {
             installmentRepository.save(new Installment(loan,monthlyRate,interest.getEffectiveInterestRate(),loan.getCurrency(),loan.getNextInstallmentDate(),null, PaymentStatus.UNPAID));
             emailDto=new EmailDto(loanRequest.getUserEmail(),loanRequest.getUsername(), loan.getAmount(), loanRequest.getClientId());
             req="ODOBREN";
+            clientService.addMarginPermission(loan.getClientId());
         }
         else
         {

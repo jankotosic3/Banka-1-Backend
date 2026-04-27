@@ -2,6 +2,7 @@ package com.banka1.clientService.service.implementation;
 
 import com.banka1.clientService.domain.ClientConfirmationToken;
 import com.banka1.clientService.domain.Klijent;
+import com.banka1.clientService.domain.enums.Permission;
 import com.banka1.clientService.dto.rabbitmq.EmailDto;
 import com.banka1.clientService.dto.rabbitmq.EmailType;
 import com.banka1.clientService.dto.requests.ClientCreateRequestDto;
@@ -52,6 +53,17 @@ public class ClientServiceImplementation implements ClientService {
     /** Bazni URL za aktivaciju naloga na koji se dodaje generisani token. */
     @org.springframework.beans.factory.annotation.Value("${url.activate-account}")
     private String urlActivateAccount;
+
+    @Override
+    @Transactional
+    public void addMarginPermission(Long id) {
+        Klijent klijent=klijentRepository.findById(id).orElse(null);
+        if(klijent == null)
+            throw new IllegalArgumentException("Ne postoji id");
+        klijent.getPermissionSet().add(Permission.MARGIN_TRADE);
+        //save vrv ne mora jer je managed entity ali ne skodi
+        klijentRepository.save(klijent);
+    }
 
     /**
      * Kreira novog klijenta i salje notifikacioni mejl nakon uspesnog commita transakcije.

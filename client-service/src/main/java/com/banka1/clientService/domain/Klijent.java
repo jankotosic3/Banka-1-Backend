@@ -1,6 +1,7 @@
 package com.banka1.clientService.domain;
 
 import com.banka1.clientService.domain.enums.ClientRole;
+import com.banka1.clientService.domain.enums.Permission;
 import com.banka1.clientService.domain.enums.Pol;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
@@ -12,6 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.SQLRestriction;
+
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * JPA entitet koji predstavlja klijenta banke.
@@ -133,6 +137,10 @@ public class Klijent extends BaseEntity {
     @NotBlank
     @Column(nullable = false, unique = true, length = 13)
     private String jmbg;
+
+    @Column(name = "permission", nullable = false)
+    @Enumerated(EnumType.STRING)
+    private Set<Permission> permissionSet = new HashSet<>();
 
     @Override
     public String toString() {

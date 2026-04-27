@@ -2,6 +2,7 @@ package com.banka1.clientService.service.implementation;
 
 import com.banka1.clientService.domain.ClientConfirmationToken;
 import com.banka1.clientService.domain.Klijent;
+import com.banka1.clientService.domain.enums.Permission;
 import com.banka1.clientService.dto.rabbitmq.EmailDto;
 import com.banka1.clientService.dto.rabbitmq.EmailType;
 import com.banka1.clientService.dto.requests.ActivateDto;
@@ -30,7 +31,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 /**
  * Implementacija {@link AuthService} koja upravlja celokupnim zivotnim ciklusom autentifikacije
@@ -77,6 +80,11 @@ public class AuthServiceImplementation implements AuthService {
     /** Vreme vazenja JWT tokena u milisekundama. */
     @Value("${banka.security.expiration-time}")
     private Long expirationTime;
+
+    /** Naziv claim-a u JWT-u koji nosi listu permisija korisnika. */
+    @Value("${banka.security.permissions-claim}")
+    private String permission;
+
 
     /** Bazni URL za aktivaciju naloga na koji se dodaje generisani token. */
     @Value("${url.activate-account}")
@@ -132,11 +140,17 @@ public class AuthServiceImplementation implements AuthService {
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS, "");
         }
 
+        List<String> permissions = new ArrayList<>();
+        for (Permission x : klijent.getPermissionSet()) {
+            permissions.add(x.name());
+        }
+
         JWTClaimsSet claims = new JWTClaimsSet.Builder()
                 .subject(klijent.getEmail())
                 .issuer(issuer)
                 .claim(idClaim, klijent.getId())
                 .claim(rolesClaim, klijent.getRole().name())
+                .claim(permission, permissions)
                 .expirationTime(new Date(System.currentTimeMillis() + expirationTime))
                 .build();
 

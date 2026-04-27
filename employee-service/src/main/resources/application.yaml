@@ -12,6 +12,6 @@ employees:
       - TRADE_UNLIMITED                  # trgovina bez limita
       - OTC_TRADE                        # OTC (over-the-counter) - trgovina za direktnu trgovinu akcijama i futures-ima
       - FUND_AGENT_MANAGE                # upravljanje fondovima i agentima
-
+      - MARGIN_TRADE                     # trgovina sa marginama
     ADMIN:
       - EMPLOYEE_MANAGE_ALL              # upravlja svim zaposlenima

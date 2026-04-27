@@ -1,12 +1,12 @@
 -- liquibase formatted sql
 
--- changeset client-service:6
+-- changeset client-service:7
 ALTER TABLE clients ADD COLUMN aktivan BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Svi postojeci klijenti (seedovani sa lozinkama) treba da budu aktivni
 UPDATE clients SET aktivan = TRUE WHERE deleted = false;
 
--- changeset client-service:7
+-- changeset client-service:8
 CREATE TABLE client_confirmation_token
 (
     id                   BIGSERIAL PRIMARY KEY,

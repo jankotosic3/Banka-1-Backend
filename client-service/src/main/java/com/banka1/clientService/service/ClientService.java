@@ -13,6 +13,8 @@ import org.springframework.data.domain.Pageable;
  */
 public interface ClientService {
 
+    void addMarginPermission(Long id);
+
     /**
      * Kreira novog klijenta.
      *
