@@ -28,7 +28,8 @@ public class StockListingDto {
     private BigDecimal bid;
     /** Currency code of the listing's exchange. */
     private String currency;
-    /** Identifier of the exchange this listing belongs to. */
+    /** Identifier of the exchange this listing belongs to. Stock-service serializes this field as "stockExchangeId". */
+    @JsonProperty("stockExchangeId")
     private Long exchangeId;
     /** Number of units per contract. */
     private Integer contractSize;

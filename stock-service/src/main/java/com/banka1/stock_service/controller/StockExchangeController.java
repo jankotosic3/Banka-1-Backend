@@ -1,5 +1,7 @@
 package com.banka1.stock_service.controller;
 
+import com.banka1.stock_service.dto.ExchangeRuntimeStatusResponse;
+import com.banka1.stock_service.dto.StockExchangeMarketPhase;
 import com.banka1.stock_service.dto.StockExchangeResponse;
 import com.banka1.stock_service.dto.StockExchangeStatusResponse;
 import com.banka1.stock_service.dto.StockExchangeToggleResponse;
@@ -55,6 +57,22 @@ public class StockExchangeController {
     public ResponseEntity<StockExchangeStatusResponse> getStockExchangeStatus(@PathVariable Long id) {
         StockExchangeStatusResponse response = stockExchangeService.getStockExchangeStatus(id);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Compact runtime status for service-to-service callers (e.g. order-service).
+     * Mirrors {@code /is-open} but returns only open / closed / after-hours flags.
+     *
+     * @param id exchange identifier
+     * @return runtime flags suitable for trading-window decisions
+     */
+    @Operation(summary = "Get compact stock exchange runtime status")
+    @GetMapping("/api/stock-exchanges/{id}/status")
+    @PreAuthorize("hasAnyRole('CLIENT_BASIC', 'BASIC', 'AGENT', 'SUPERVISOR', 'ADMIN', 'SERVICE')")
+    public ResponseEntity<ExchangeRuntimeStatusResponse> getStockExchangeRuntimeStatus(@PathVariable Long id) {
+        StockExchangeStatusResponse status = stockExchangeService.getStockExchangeStatus(id);
+        boolean afterHours = status.marketPhase() == StockExchangeMarketPhase.POST_MARKET;
+        return ResponseEntity.ok(new ExchangeRuntimeStatusResponse(status.open(), afterHours, !status.open()));
     }
 
     /**
