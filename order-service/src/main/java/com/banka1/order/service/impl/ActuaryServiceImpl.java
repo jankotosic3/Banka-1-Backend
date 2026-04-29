@@ -7,6 +7,7 @@ import com.banka1.order.dto.EmployeePageResponse;
 import com.banka1.order.dto.SetLimitRequestDto;
 import com.banka1.order.dto.SetNeedApprovalRequestDto;
 import com.banka1.order.entity.ActuaryInfo;
+import com.banka1.order.exception.ResourceNotFoundException;
 import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.service.ActuaryService;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
@@ -113,7 +115,7 @@ public class ActuaryServiceImpl implements ActuaryService {
     @Override
     @Transactional
     public void setLimit(Long employeeId, SetLimitRequestDto request) {
-        EmployeeDto employee = employeeClient.getEmployee(employeeId);
+        EmployeeDto employee = fetchEmployeeOrNotFound(employeeId);
 
         if ("ADMIN".equals(employee.getRole())) {
             throw new IllegalArgumentException("Cannot change the limit of an admin.");
@@ -142,10 +144,13 @@ public class ActuaryServiceImpl implements ActuaryService {
     @Override
     @Transactional
     public void resetLimit(Long employeeId) {
-        EmployeeDto employee = employeeClient.getEmployee(employeeId);
+        EmployeeDto employee = fetchEmployeeOrNotFound(employeeId);
 
         if ("ADMIN".equals(employee.getRole())) {
             throw new IllegalArgumentException("Cannot reset the limit of an admin.");
+        }
+        if (!"AGENT".equals(employee.getRole())) {
+            throw new IllegalArgumentException("Limit can only be reset for employees with the AGENT role.");
         }
 
         ActuaryInfo info = actuaryInfoRepository.findByEmployeeId(employeeId)
@@ -162,7 +167,7 @@ public class ActuaryServiceImpl implements ActuaryService {
     @Override
     @Transactional
     public void setNeedApproval(Long employeeId, SetNeedApprovalRequestDto request) {
-        EmployeeDto employee = employeeClient.getEmployee(employeeId);
+        EmployeeDto employee = fetchEmployeeOrNotFound(employeeId);
 
         if ("ADMIN".equals(employee.getRole())) {
             throw new IllegalArgumentException("Cannot change the need-approval flag of an admin.");
@@ -200,6 +205,14 @@ public class ActuaryServiceImpl implements ActuaryService {
      * @param employeeId the employee's identifier
      * @return the newly saved actuary record
      */
+    private EmployeeDto fetchEmployeeOrNotFound(Long employeeId) {
+        try {
+            return employeeClient.getEmployee(employeeId);
+        } catch (HttpClientErrorException.NotFound ex) {
+            throw new ResourceNotFoundException("Employee with ID " + employeeId + " not found.");
+        }
+    }
+
     private ActuaryInfo createDefaultActuaryInfo(Long employeeId) {
         ActuaryInfo info = new ActuaryInfo();
         info.setEmployeeId(employeeId);

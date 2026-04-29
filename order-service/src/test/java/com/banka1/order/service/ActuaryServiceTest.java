@@ -7,6 +7,7 @@ import com.banka1.order.dto.SetLimitRequestDto;
 import com.banka1.order.dto.SetNeedApprovalRequestDto;
 import com.banka1.order.entity.ActuaryInfo;
 import com.banka1.order.repository.ActuaryInfoRepository;
+import com.banka1.order.exception.ResourceNotFoundException;
 import com.banka1.order.service.impl.ActuaryServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -193,6 +197,20 @@ class ActuaryServiceTest {
     }
 
     @Test
+    void resetLimit_throwsWhenTargetIsNotAgent() {
+        EmployeeDto supervisor = new EmployeeDto();
+        supervisor.setId(3L);
+        supervisor.setRole("SUPERVISOR");
+
+        when(employeeClient.getEmployee(3L)).thenReturn(supervisor);
+
+        assertThatThrownBy(() -> actuaryService.resetLimit(3L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("AGENT");
+        verify(actuaryInfoRepository, never()).save(any());
+    }
+
+    @Test
     void setNeedApproval_togglesFlagForAgent() {
         SetNeedApprovalRequestDto request = new SetNeedApprovalRequestDto();
         request.setNeedApproval(true);
@@ -268,6 +286,45 @@ class ActuaryServiceTest {
         assertThatThrownBy(() -> actuaryService.setNeedApproval(3L, request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("AGENT");
+    }
+
+    @Test
+    void setLimit_throwsResourceNotFoundWhenEmployeeMissing() {
+        SetLimitRequestDto request = new SetLimitRequestDto();
+        request.setLimit(new BigDecimal("50000.00"));
+
+        when(employeeClient.getEmployee(999999L))
+                .thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", HttpHeaders.EMPTY, new byte[0], null));
+
+        assertThatThrownBy(() -> actuaryService.setLimit(999999L, request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("999999");
+        verify(actuaryInfoRepository, never()).save(any());
+    }
+
+    @Test
+    void resetLimit_throwsResourceNotFoundWhenEmployeeMissing() {
+        when(employeeClient.getEmployee(999999L))
+                .thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", HttpHeaders.EMPTY, new byte[0], null));
+
+        assertThatThrownBy(() -> actuaryService.resetLimit(999999L))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("999999");
+        verify(actuaryInfoRepository, never()).save(any());
+    }
+
+    @Test
+    void setNeedApproval_throwsResourceNotFoundWhenEmployeeMissing() {
+        SetNeedApprovalRequestDto request = new SetNeedApprovalRequestDto();
+        request.setNeedApproval(true);
+
+        when(employeeClient.getEmployee(999999L))
+                .thenThrow(HttpClientErrorException.create(HttpStatus.NOT_FOUND, "Not Found", HttpHeaders.EMPTY, new byte[0], null));
+
+        assertThatThrownBy(() -> actuaryService.setNeedApproval(999999L, request))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("999999");
+        verify(actuaryInfoRepository, never()).save(any());
     }
 
     @Test

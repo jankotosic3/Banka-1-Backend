@@ -97,6 +97,9 @@ public class ActuaryController {
      * This allows supervisors to manually reset an agent's daily consumption at any time,
      * not just at the scheduled 23:59 reset. Useful for special circumstances or corrections.
      *
+     * Only employees with the AGENT role can have their limit reset; supervisors and admins
+     * have no daily limit and are rejected with 400 Bad Request.
+     *
      * @param id the employee ID of the agent
      * @return 200 OK on success
      * @throws ResourceNotFoundException if employee not found
