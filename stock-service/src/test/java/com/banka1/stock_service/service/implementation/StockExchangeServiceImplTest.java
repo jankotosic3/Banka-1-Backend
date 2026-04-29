@@ -133,6 +133,15 @@ class StockExchangeServiceImplTest {
     }
 
     @Test
+    void toggleStockExchangeActiveThrowsNotFoundWhenExchangeDoesNotExist() {
+        when(stockExchangeRepository.findById(404L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> serviceAt("2026-04-06T14:30:00Z").toggleStockExchangeActive(404L))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+    }
+
+    @Test
     void getStockExchangeStatusThrowsNotFoundWhenExchangeDoesNotExist() {
         when(stockExchangeRepository.findById(404L)).thenReturn(Optional.empty());
 

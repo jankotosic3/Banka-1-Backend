@@ -23,6 +23,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -30,6 +31,7 @@ import java.util.List;
 
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -135,6 +137,19 @@ class StockExchangeControllerWebMvcTest {
                 .andExpect(jsonPath("$.isActive").value(false));
 
         verify(stockExchangeService).toggleStockExchangeActive(1L);
+    }
+
+    @Test
+    void toggleStockExchangeActiveReturnsNotFoundForUnknownId() throws Exception {
+        when(stockExchangeService.toggleStockExchangeActive(290000L))
+                .thenThrow(new ResponseStatusException(NOT_FOUND, "Stock exchange with id 290000 was not found."));
+
+        mockMvc.perform(put("/api/stock-exchanges/290000/toggle-active")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                                .jwt(token -> token.claim("id", 13L))))
+                .andExpect(status().isNotFound());
+
+        verify(stockExchangeService).toggleStockExchangeActive(290000L);
     }
 
     @TestConfiguration
