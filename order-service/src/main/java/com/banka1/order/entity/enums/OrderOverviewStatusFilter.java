@@ -8,5 +8,6 @@ public enum OrderOverviewStatusFilter {
     PENDING,
     APPROVED,
     DECLINED,
-    DONE
+    DONE,
+    CANCELLED,
 }

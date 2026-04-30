@@ -5,10 +5,10 @@ import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountDetailsDto;
-import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
+import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.entity.ActuaryInfo;
 import com.banka1.order.entity.Order;
 import com.banka1.order.entity.Portfolio;
@@ -42,7 +42,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -132,9 +131,13 @@ class OrderExecutionServiceTest {
         actuaryInfo.setReservedLimit(new BigDecimal("23634.00"));
 
         accountDetails = new AccountDetailsDto();
-        accountDetails.setAccountNumber("ACC-1");
+        accountDetails.setAccountNumber("1110001400000000221");
         accountDetails.setCurrency("USD");
         accountDetails.setOwnerId(1L);
+        AccountDetailsDto bankDetails = new AccountDetailsDto();
+        bankDetails.setAccountNumber("1110001000000000023");
+        bankDetails.setCurrency("USD");
+        bankDetails.setOwnerId(-1L);
 
         ExchangeRateDto usdToRsd = new ExchangeRateDto();
         usdToRsd.setConvertedAmount(new BigDecimal("23634.00"));
@@ -150,9 +153,8 @@ class OrderExecutionServiceTest {
         lenient().when(transactionRepository.save(any(Transaction.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(portfolioRepository.save(any(Portfolio.class))).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        lenient().doNothing().when(accountClient).transfer(any(AccountTransactionRequest.class));
         lenient().when(accountClient.getAccountDetails(5L)).thenReturn(accountDetails);
-        lenient().when(accountClient.getAccountDetails(999L)).thenReturn(accountDetails);
+        lenient().when(accountClient.getAccountDetails(999L)).thenReturn(bankDetails);
         lenient().when(exchangeClient.calculate("USD", "RSD", new BigDecimal("202.00"))).thenReturn(usdToRsd);
         lenient().when(exchangeClient.calculateWithoutCommission("USD", "RSD", new BigDecimal("202.00"))).thenReturn(usdToRsd);
         lenient().when(exchangeClient.calculate("USD", "USD", new BigDecimal("7"))).thenReturn(usdCap);
@@ -201,10 +203,10 @@ class OrderExecutionServiceTest {
         assertThat(transactionCaptor.getValue().getPricePerUnit()).isEqualByComparingTo("101.00");
         assertThat(transactionCaptor.getValue().getTotalPrice()).isEqualByComparingTo("202.00");
 
-        ArgumentCaptor<AccountTransactionRequest> transferCaptor = ArgumentCaptor.forClass(AccountTransactionRequest.class);
-        verify(accountClient).transfer(transferCaptor.capture());
-        assertThat(transferCaptor.getValue().getFromAccountId()).isEqualTo(5L);
-        assertThat(transferCaptor.getValue().getToAccountId()).isEqualTo(999L);
+        ArgumentCaptor<PaymentDto> transferCaptor = ArgumentCaptor.forClass(PaymentDto.class);
+        verify(accountClient).transaction(transferCaptor.capture());
+        assertThat(transferCaptor.getValue().getFromAccountNumber()).isEqualTo("1110001400000000221");
+        assertThat(transferCaptor.getValue().getToAccountNumber()).isEqualTo("1110001000000000023");
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DONE);
         assertThat(order.getIsDone()).isTrue();
     }
@@ -228,7 +230,7 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(staleOrder);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
-        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient, never()).transaction(any(PaymentDto.class));
         verify(portfolioRepository, never()).save(any(Portfolio.class));
         verify(orderRepository, never()).save(cancelledOrder);
     }
@@ -263,7 +265,7 @@ class OrderExecutionServiceTest {
 
         assertThat(staleOrder.getRemainingPortions()).isEqualTo(5);
         assertThat(lockedOrder.getRemainingPortions()).isZero();
-        verify(accountClient).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient).transaction(any(PaymentDto.class));
         verify(transactionRepository).save(any(Transaction.class));
     }
 
@@ -374,10 +376,10 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(order);
 
         verify(portfolioRepository, atLeastOnce()).save(portfolio);
-        ArgumentCaptor<AccountTransactionRequest> captor = ArgumentCaptor.forClass(AccountTransactionRequest.class);
-        verify(accountClient).transfer(captor.capture());
-        assertThat(captor.getValue().getFromAccountId()).isEqualTo(999L);
-        assertThat(captor.getValue().getToAccountId()).isEqualTo(5L);
+        ArgumentCaptor<PaymentDto> captor = ArgumentCaptor.forClass(PaymentDto.class);
+        verify(accountClient).transaction(captor.capture());
+        assertThat(captor.getValue().getFromAccountNumber()).isEqualTo("1110001000000000023");
+        assertThat(captor.getValue().getToAccountNumber()).isEqualTo("1110001400000000221");
     }
 
     @Test
@@ -398,7 +400,7 @@ class OrderExecutionServiceTest {
 
         service.executeOrderPortion(order);
 
-        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient, never()).transaction(any(PaymentDto.class));
     }
 
     @Test
@@ -408,7 +410,7 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(order);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
-        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient, never()).transaction(any(PaymentDto.class));
         verify(portfolioRepository, never()).save(any(Portfolio.class));
     }
 
@@ -420,7 +422,7 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(order);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
-        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient, never()).transaction(any(PaymentDto.class));
         verify(portfolioRepository, never()).save(any(Portfolio.class));
     }
 
@@ -431,7 +433,7 @@ class OrderExecutionServiceTest {
         service.executeOrderPortion(order);
 
         verify(transactionRepository, never()).save(any(Transaction.class));
-        verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(accountClient, never()).transaction(any(PaymentDto.class));
         verify(portfolioRepository, never()).save(any(Portfolio.class));
     }
 

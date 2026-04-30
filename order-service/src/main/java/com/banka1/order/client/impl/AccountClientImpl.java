@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -39,10 +40,25 @@ public class AccountClientImpl implements AccountClient {
      */
     @Override
     public AccountDetailsDto getAccountDetails(Long accountId) {
+        if (looksLikeAccountNumber(accountId)) {
+            return getAccountDetails(String.valueOf(accountId));
+        }
+        try {
+            return getAccountDetailsByInternalId(accountId);
+        } catch (HttpClientErrorException.NotFound ex) {
+            return getAccountDetails(String.valueOf(accountId));
+        }
+    }
+
+    private AccountDetailsDto getAccountDetailsByInternalId(Long accountId) {
         return accountRestClient.get()
                 .uri("/internal/accounts/id/{accountId}/details", accountId)
                 .retrieve()
                 .body(AccountDetailsDto.class);
+    }
+
+    private boolean looksLikeAccountNumber(Long accountId) {
+        return accountId != null && String.valueOf(accountId).length() >= 18;
     }
 
     @Override

@@ -5,7 +5,6 @@ import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
 import com.banka1.order.dto.AccountDetailsDto;
-import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.CreateBuyOrderRequest;
@@ -831,13 +830,15 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         AccountDetailsDto fromAccount = accountClient.getAccountDetails(fromAccountId);
         AccountDetailsDto toAccount = accountClient.getAccountDetails(toAccountId);
         if (fromAccount.getCurrency() == null || fromAccount.getCurrency().equalsIgnoreCase(targetCurrency)) {
-            AccountTransactionRequest transferRequest = new AccountTransactionRequest();
-            transferRequest.setFromAccountId(fromAccountId);
-            transferRequest.setToAccountId(toAccountId);
-            transferRequest.setAmount(targetAmount);
-            transferRequest.setCurrency(targetCurrency);
-            transferRequest.setDescription(description);
-            accountClient.transfer(transferRequest);
+            PaymentDto payment = new PaymentDto(
+                    fromAccount.getAccountNumber(),
+                    toAccount.getAccountNumber(),
+                    targetAmount,
+                    targetAmount,
+                    BigDecimal.ZERO,
+                    fromAccount.getOwnerId()
+            );
+            accountClient.transaction(payment);
             return;
         }
 

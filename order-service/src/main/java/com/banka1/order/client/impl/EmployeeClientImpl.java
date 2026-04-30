@@ -4,8 +4,8 @@ import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.EmployeeDto;
 import com.banka1.order.dto.EmployeePageResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -18,11 +18,17 @@ import java.util.Optional;
  */
 @Component
 @Profile("!local")
-@RequiredArgsConstructor
 @Slf4j
 public class EmployeeClientImpl implements EmployeeClient {
 
     private final RestClient employeeRestClient;
+    private final RestClient accountRestClient;
+
+    public EmployeeClientImpl(@Qualifier("employeeRestClient") RestClient employeeRestClient,
+                              @Qualifier("accountRestClient") RestClient accountRestClient) {
+        this.employeeRestClient = employeeRestClient;
+        this.accountRestClient = accountRestClient;
+    }
 
     /**
      * {@inheritDoc}
@@ -59,8 +65,8 @@ public class EmployeeClientImpl implements EmployeeClient {
      */
     @Override
     public BankAccountDto getBankAccount(String currency) {
-        return employeeRestClient.get()
-                .uri("/employee/accounts/bank/{currency}", currency)
+        return accountRestClient.get()
+                .uri("/internal/accounts/bank/{currency}", currency)
                 .retrieve()
                 .body(BankAccountDto.class);
     }

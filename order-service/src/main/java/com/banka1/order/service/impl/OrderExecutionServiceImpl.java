@@ -4,7 +4,6 @@ import com.banka1.order.client.AccountClient;
 import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
-import com.banka1.order.dto.AccountTransactionRequest;
 import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
@@ -427,13 +426,17 @@ public class OrderExecutionServiceImpl implements OrderExecutionService {
         if (fromAccountId != null && fromAccountId.equals(toAccountId)) {
             throw new IllegalStateException("Transfer source and destination must differ");
         }
-        AccountTransactionRequest request = new AccountTransactionRequest();
-        request.setFromAccountId(fromAccountId);
-        request.setToAccountId(toAccountId);
-        request.setAmount(amount);
-        request.setCurrency(currency);
-        request.setDescription(description);
-        accountClient.transfer(request);
+        AccountDetailsDto fromAccount = accountClient.getAccountDetails(fromAccountId);
+        AccountDetailsDto toAccount = accountClient.getAccountDetails(toAccountId);
+        PaymentDto payment = new PaymentDto(
+                fromAccount.getAccountNumber(),
+                toAccount.getAccountNumber(),
+                amount,
+                amount,
+                BigDecimal.ZERO,
+                orderOwnerId(fromAccount)
+        );
+        accountClient.transaction(payment);
     }
 
     private void transferForClient(Long fromAccountId, Long toAccountId, BigDecimal amount, String currency, String description) {

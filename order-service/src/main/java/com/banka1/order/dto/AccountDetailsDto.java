@@ -1,5 +1,6 @@
 package com.banka1.order.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -10,8 +11,10 @@ import java.math.BigDecimal;
 @Data
 public class AccountDetailsDto {
     /** The unique account number. */
+    @JsonAlias("brojRacuna")
     private String accountNumber;
     /** Current available balance. */
+    @JsonAlias({"availableBalance", "raspolozivoStanje", "stanjeRacuna"})
     private BigDecimal balance;
     /** Currency code of the account (e.g. "RSD", "USD"). */
     private String currency;

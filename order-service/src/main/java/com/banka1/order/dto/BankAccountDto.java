@@ -9,7 +9,7 @@ import lombok.Data;
 @Data
 public class BankAccountDto {
 
-    /** Internal identifier of the bank account. */
-    @JsonAlias({"id", "accountId"})
+    /** Account reference returned by account-service; may be an internal id or account number. */
+    @JsonAlias({"id", "accountId", "accountNumber", "brojRacuna"})
     private Long accountId;
 }
