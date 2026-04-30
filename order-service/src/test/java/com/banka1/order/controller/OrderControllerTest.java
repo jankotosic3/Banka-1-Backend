@@ -108,6 +108,34 @@ class OrderControllerTest {
     }
 
     @Test
+    void approveAndDeclineUseIdClaimNotEmailSubject() {
+        OrderResponse approved = new OrderResponse();
+        approved.setId(7L);
+        approved.setStatus(OrderStatus.APPROVED);
+        OrderResponse declined = new OrderResponse();
+        declined.setId(7L);
+        declined.setStatus(OrderStatus.DECLINED);
+        when(orderCreationService.approveOrder(eq(99L), eq(7L))).thenReturn(approved);
+        when(orderCreationService.declineOrder(eq(99L), eq(7L))).thenReturn(declined);
+
+        Jwt jwt = Jwt.withTokenValue("token")
+                .subject("supervisor@banka.com")
+                .claim("id", 99L)
+                .claim("roles", List.of("SUPERVISOR"))
+                .claim("permissions", List.of())
+                .header("alg", "none")
+                .build();
+
+        ResponseEntity<OrderResponse> approveResponse = controller.approveOrder(jwt, 7L);
+        ResponseEntity<OrderResponse> declineResponse = controller.declineOrder(jwt, 7L);
+
+        assertThat(approveResponse.getBody().getStatus()).isEqualTo(OrderStatus.APPROVED);
+        assertThat(declineResponse.getBody().getStatus()).isEqualTo(OrderStatus.DECLINED);
+        verify(orderCreationService).approveOrder(99L, 7L);
+        verify(orderCreationService).declineOrder(99L, 7L);
+    }
+
+    @Test
     void buyAndSellRequestsUseBeanValidation() throws Exception {
         Method createBuyOrder = OrderController.class.getDeclaredMethod("createBuyOrder", Jwt.class, com.banka1.order.dto.CreateBuyOrderRequest.class);
         assertThat(createBuyOrder.getParameters()[1].getAnnotation(Valid.class)).isNotNull();

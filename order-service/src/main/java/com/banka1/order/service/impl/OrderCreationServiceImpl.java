@@ -231,7 +231,9 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         } else if (order.getDirection() == OrderDirection.BUY) {
             checkFunds(fundingAccountId, approximatePrice.add(fee));
         }
-        ApprovalReservationDecision decision = determineOrderStatusAndReserveExposure(user.userId(), approximatePrice, listing.getCurrency());
+        ApprovalReservationDecision decision = user.isClient()
+                ? new ApprovalReservationDecision(OrderStatus.PENDING, BigDecimal.ZERO)
+                : determineOrderStatusAndReserveExposure(user.userId(), approximatePrice, listing.getCurrency());
         reserveSellQuantityIfNeeded(order);
         if (decision.status() == OrderStatus.APPROVED) {
             transferFee(user, fundingAccountId, fee, listing.getCurrency());

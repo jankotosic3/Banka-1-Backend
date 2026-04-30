@@ -105,13 +105,13 @@ public class OrderController {
     @PutMapping("/{id}/approve")
     @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<OrderResponse> approveOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
-        return ResponseEntity.ok(orderCreationService.approveOrder(Long.valueOf(jwt.getSubject()), id));
+        return ResponseEntity.ok(orderCreationService.approveOrder(toAuthenticatedUser(jwt).userId(), id));
     }
 
     @PutMapping("/{id}/decline")
     @PreAuthorize("hasRole('SUPERVISOR')")
     public ResponseEntity<OrderResponse> declineOrder(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
-        return ResponseEntity.ok(orderCreationService.declineOrder(Long.valueOf(jwt.getSubject()), id));
+        return ResponseEntity.ok(orderCreationService.declineOrder(toAuthenticatedUser(jwt).userId(), id));
     }
 
     private AuthenticatedUser toAuthenticatedUser(Jwt jwt) {
