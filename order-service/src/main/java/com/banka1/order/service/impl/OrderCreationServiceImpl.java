@@ -239,9 +239,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         } else if (order.getDirection() == OrderDirection.BUY) {
             checkFunds(fundingAccountId, approximatePrice.add(fee));
         }
-        ApprovalReservationDecision decision = requiresSupervisorApprovalOnConfirm(user, order)
-                ? new ApprovalReservationDecision(OrderStatus.PENDING, BigDecimal.ZERO)
-                : user.isClient()
+        ApprovalReservationDecision decision = user.isClient()
                 ? new ApprovalReservationDecision(OrderStatus.APPROVED, BigDecimal.ZERO)
                 : determineOrderStatusAndReserveExposure(user.userId(), approximatePrice, listing.getCurrency());
         reserveSellQuantityIfNeeded(order);
@@ -526,10 +524,6 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                 ? OrderStatus.PENDING
                 : OrderStatus.APPROVED;
         return new ApprovalReservationDecision(status, limit == null ? BigDecimal.ZERO : orderAmountInLimitCurrency);
-    }
-
-    private boolean requiresSupervisorApprovalOnConfirm(AuthenticatedUser user, Order order) {
-        return user.hasRole("CLIENT_TRADING") && order.getDirection() == OrderDirection.BUY;
     }
 
     private void checkMarginRequirements(AuthenticatedUser user, Long fundingAccountId, StockListingDto listing, Integer quantity) {
