@@ -222,14 +222,27 @@ class OrderCreationServiceTest {
 //    }
 
     @Test
-    void confirmBuyOrder_forClientAutoApprovedAndStartsExecution() {
+    void confirmBuyOrder_forTradingClientMovesToPendingAndWaitsForApproval() {
         service.createBuyOrder(clientUser, buyRequest);
 
         OrderResponse response = service.confirmOrder(clientUser, 100L);
 
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.APPROVED);
-        assertThat(response.getApprovedBy()).isEqualTo(OrderCreationServiceImpl.NO_APPROVAL_REQUIRED);
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
+        assertThat(response.getApprovedBy()).isNull();
         verify(accountClient, never()).transfer(any(AccountTransactionRequest.class));
+        verify(orderExecutionService, never()).executeOrderAsync(any());
+    }
+
+    @Test
+    void approveOrder_forTradingClientBuyUpdatesApprovedByChargesFeeAndStartsExecution() {
+        service.createBuyOrder(clientUser, buyRequest);
+        service.confirmOrder(clientUser, 100L);
+
+        OrderResponse response = service.approveOrder(88L, 100L);
+
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.APPROVED);
+        assertThat(response.getApprovedBy()).isEqualTo(88L);
+        verify(accountClient).transaction(any(PaymentDto.class));
         verify(orderExecutionService).executeOrderAsync(100L);
     }
 
@@ -481,7 +494,7 @@ class OrderCreationServiceTest {
     }
 
     @Test
-    void confirmMarginBuy_acceptsWhenApprovedCreditCoversInitialMargin() {
+    void confirmMarginBuy_forTradingClientMovesToPendingWhenApprovedCreditCoversInitialMargin() {
         buyRequest.setMargin(true);
         accountDetails.setBalance(BigDecimal.ZERO);
         accountDetails.setAvailableCredit(new BigDecimal("10000.00"));
@@ -489,7 +502,8 @@ class OrderCreationServiceTest {
         service.createBuyOrder(marginClient, buyRequest);
         OrderResponse response = service.confirmOrder(marginClient, 100L);
 
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.APPROVED);
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
+        verify(orderExecutionService, never()).executeOrderAsync(any());
     }
 
     @Test
@@ -800,8 +814,8 @@ class OrderCreationServiceTest {
     }
 
     @Test
-    void clientCannotCreateUnsupportedListingTypes() {
-        listing.setListingType(ListingType.OPTION);
+    void tradingClientCannotCreateForexOrders() {
+        listing.setListingType(ListingType.FOREX);
 
         assertThatThrownBy(() -> service.createBuyOrder(clientUser, buyRequest))
                 .isInstanceOf(ForbiddenOperationException.class)
