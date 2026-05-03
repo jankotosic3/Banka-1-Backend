@@ -155,8 +155,8 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     public Page<OrderOverviewResponse> getOrders(OrderOverviewStatusFilter statusFilter, Pageable pageable) {
         List<Order> orders = statusFilter == null || statusFilter == OrderOverviewStatusFilter.ALL
                 ? orderRepository.findAll().stream()
-                .filter(order -> order.getStatus() != OrderStatus.PENDING_CONFIRMATION)
-                .toList()
+                  .filter(order -> order.getStatus() != OrderStatus.PENDING_CONFIRMATION)
+                  .toList()
                 : orderRepository.findByStatus(OrderStatus.valueOf(statusFilter.name()));
 
         Set<Long> listingIds = new HashSet<>();
