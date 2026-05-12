@@ -22,12 +22,12 @@ public class NewPaymentDto {
 
     /** Account number from which the payment is made. */
     @NotBlank(message = "Unesi racun posiljaoca")
-    @Pattern(regexp = "^\\d{19}$", message = "Broj racuna mora imati 19 cifara")
+    @Pattern(regexp = "^\\d{18,19}$", message = "Broj racuna mora imati 18 ili 19 cifara")
     private String fromAccountNumber;
 
     /** Account number to which the payment is made. */
     @NotBlank(message = "Unesi racun primaoca")
-    @Pattern(regexp = "^\\d{19}$", message = "Broj racuna mora imati 19 cifara")
+    @Pattern(regexp = "^\\d{18,19}$", message = "Broj racuna mora imati 18 ili 19 cifara")
     private String toAccountNumber;
 
     /** Amount to be transferred. */

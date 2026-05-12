@@ -16,7 +16,12 @@ public enum ErrorCode {
     INSUFFICIENT_FUNDS(HttpStatus.UNPROCESSABLE_CONTENT,"ERR_ACCOUNT_001","Nema dovoljno novca na racunu"),
     DAILY_LIMIT_EXCEEDED(HttpStatus.UNPROCESSABLE_CONTENT,"ERR_ACOCUNT_002","Predjen dnevni limit"),
     MONTHLY_LIMIT_EXCEEDED(HttpStatus.UNPROCESSABLE_CONTENT,"ERR_ACOCUNT_003","Predjen mesecni limit"),
-    VERIFICATION_FAILED(HttpStatus.FORBIDDEN,"ERR_ACCOUNT_004","Neuspesna verifikacija");
+    VERIFICATION_FAILED(HttpStatus.FORBIDDEN,"ERR_ACCOUNT_004","Neuspesna verifikacija"),
+
+    // ── Payment recipients (ERR_RECIPIENT_xxx) ────────────────
+    RECIPIENT_NOT_FOUND(HttpStatus.NOT_FOUND,"ERR_RECIPIENT_001","Primalac nije pronadjen"),
+    RECIPIENT_NAME_TAKEN(HttpStatus.CONFLICT,"ERR_RECIPIENT_002","Vec postoji primalac sa ovim nazivom"),
+    INVALID_TOKEN(HttpStatus.UNAUTHORIZED,"ERR_AUTH_001","JWT ne sadrzi potreban claim");
 
     /** HTTP status returned to the client when this error is thrown. */
     private final HttpStatus httpStatus;

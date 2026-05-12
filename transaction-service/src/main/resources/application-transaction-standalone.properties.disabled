@@ -7,18 +7,18 @@ banka.security.id=id
 banka.security.roles-claim=roles
 #ms
 banka.security.expiration-time=3600000
-#months
-token.refresh.expiration-time=1
+#days (PR_01 C1.7: smanjen sa 1 mesec)
+token.refresh.expiration-time=${TOKEN_REFRESH_EXPIRATION_DAYS:7}
 #minutes
 token.confirmation.expiration-time=15
 banka.security.permissions-claim=permissions
-banka.security.permit-all=/auth/*,/v3/api-docs/**,/v3/api-docs.yaml,/swagger-ui/**,/swagger-ui.html,/actuator/**
-springdoc.api-docs.enabled=true
-springdoc.swagger-ui.enabled=true
+banka.security.permit-all=/auth/*,/v3/api-docs/**,/v3/api-docs.yaml,/swagger-ui/**,/swagger-ui.html,/actuator/health/liveness,/actuator/health/readiness,/actuator/info
+springdoc.api-docs.enabled=${SWAGGER_ENABLED:true}
+springdoc.swagger-ui.enabled=${SWAGGER_ENABLED:true}
 server.forward-headers-strategy=FRAMEWORK
 url.reset-password="http://localhost:4200/auth/reset-password?token="
 url.activate-account="http://localhost:4200/auth/activate-account?token="
-management.endpoints.web.exposure.include=*
+management.endpoints.web.exposure.include=health,info,prometheus
 management.endpoint.health.probes.enabled=true
 
 jwt.secret=${JWT_SECRET}
@@ -53,7 +53,7 @@ spring.jpa.hibernate.ddl-auto=validate
 spring.jpa.show-sql=true
 # Liquibase
 spring.liquibase.enabled=true
-spring.liquibase.change-log=classpath:db/changelog/db.changelog-master.xml
+spring.liquibase.change-log=classpath:db/changelog/db-changelog-transaction.xml
 #ovo otkomentarisati samo kada brises
 #spring.liquibase.drop-first=true
 logging.pattern.console=%d{HH:mm:ss} %-5level %logger{36} - %msg%n

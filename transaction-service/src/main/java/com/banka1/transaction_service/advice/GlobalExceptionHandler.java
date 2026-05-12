@@ -6,6 +6,8 @@ import org.springframework.amqp.AmqpException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -86,6 +88,27 @@ public class GlobalExceptionHandler {
                 "Mejl nije poslat. Naš tim je obavešten."
         );
         return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Handles Spring Security access denial with HTTP 403 Forbidden.
+     * <p>
+     * Spring Security 5: {@code @Secured} / {@code @PreAuthorize} -> {@link AccessDeniedException}.
+     * Spring Security 6: {@code @PreAuthorize} -> {@link AuthorizationDeniedException}
+     * (subclass of {@link AccessDeniedException}). Explicit handler prevents fall-through to the
+     * generic {@link Exception} catch-all (which would return 500).
+     *
+     * @param ex access denied exception
+     * @return HTTP 403 Forbidden response
+     */
+    @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
+    public ResponseEntity<ErrorResponseDto> handleAccessDenied(AccessDeniedException ex) {
+        ErrorResponseDto error = new ErrorResponseDto(
+                "ERR_FORBIDDEN",
+                "Pristup odbijen",
+                "Nemate dozvolu za ovu akciju."
+        );
+        return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
     }
 
     /**

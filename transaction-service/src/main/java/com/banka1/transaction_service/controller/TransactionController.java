@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
  * Provides endpoints for creating, retrieving, and searching transactions.
  */
 @RestController
+@RequestMapping("/transactions")
 @AllArgsConstructor
 //@PreAuthorize("hasRole('CLIENT_BASIC')")
 public class TransactionController {
@@ -67,7 +68,7 @@ public class TransactionController {
 
 
     @PreAuthorize("hasRole('BASIC')")
-    @GetMapping("/transactions/by-client")
+    @GetMapping("/by-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsByClient(@AuthenticationPrincipal Jwt jwt, @RequestParam Long id,
                                                                                  @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                  @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
@@ -76,7 +77,7 @@ public class TransactionController {
     }
 
     @PreAuthorize("hasRole('BASIC')")
-    @GetMapping("/transactions/by-sender-client")
+    @GetMapping("/by-sender-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsBySenderClient(@AuthenticationPrincipal Jwt jwt, @RequestParam Long id,
                                                                                        @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                        @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size )
@@ -85,7 +86,7 @@ public class TransactionController {
     }
 
     @PreAuthorize("hasRole('BASIC')")
-    @GetMapping("/transactions/by-recipient-client")
+    @GetMapping("/by-recipient-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsByRecipientClient(@AuthenticationPrincipal Jwt jwt, @RequestParam Long id,
                                                                                           @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                           @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
@@ -96,7 +97,7 @@ public class TransactionController {
 
 
     @PreAuthorize("hasRole('CLIENT_BASIC')")
-    @GetMapping("/transactions/by-this-client")
+    @GetMapping("/by-this-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsByThisClient(@AuthenticationPrincipal Jwt jwt,
                                                                                      @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                      @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
@@ -105,7 +106,7 @@ public class TransactionController {
     }
 
     @PreAuthorize("hasRole('CLIENT_BASIC')")
-    @GetMapping("/transactions/by-this-sender-client")
+    @GetMapping("/by-this-sender-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsByThisSenderClient(@AuthenticationPrincipal Jwt jwt,
                                                                                            @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                            @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)
@@ -114,7 +115,7 @@ public class TransactionController {
     }
 
     @PreAuthorize("hasRole('CLIENT_BASIC')")
-    @GetMapping("/transactions/by-this-recipient-client")
+    @GetMapping("/by-this-recipient-client")
     public ResponseEntity<Page<TransactionResponseDto>> findTransactionsByThisRecipientClient(@AuthenticationPrincipal Jwt jwt,
                                                                                               @RequestParam(defaultValue = "0") @Min(value = 0) int page,
                                                                                               @RequestParam(defaultValue = "10") @Min(value = 1) @Max(value = 100) int size)

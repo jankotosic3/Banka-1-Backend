@@ -61,7 +61,8 @@ public class TransactionServiceImplementation implements TransactionService {
     private String appPropertiesId;
     @Value("${banka.security.roles-claim}")
     private String roles;
-    @Value("${transaction.verification.skip:true}")
+    // Spec Celina 2: verifikacija (OTP) je obavezna za placanja; default false (secure).
+    @Value("${transaction.verification.skip:false}")
     private boolean skipVerification;
     private final TransactionServiceInternal transactionServiceInternal;
     private final PaymentRepository paymentRepository;

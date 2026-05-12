@@ -356,7 +356,7 @@ class TransactionServiceImplementationTest {
     private NewPaymentDto validPaymentDto() {
         NewPaymentDto dto = new NewPaymentDto();
         dto.setFromAccountNumber("1110001000000000011");
-        dto.setToAccountNumber("1110001000000000012");
+        dto.setToAccountNumber("111000110000000312");
         dto.setAmount(new BigDecimal("100.00"));
         dto.setRecipientName("Pera Peric");
         dto.setPaymentCode("289");
