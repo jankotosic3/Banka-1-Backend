@@ -152,3 +152,27 @@ scrape_configs:
           spanId:
           correlationId:
           logger:
+
+  - job_name: interbank-service
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: interbank-service
+          service: interbank-service
+          __path__: /var/log/services/interbank/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            serviceName: serviceName
+            traceId: traceId
+            spanId: spanId
+            correlationId: correlationId
+            logger: logger
+      - labels:
+          level:
+          serviceName:
+          traceId:
+          spanId:
+          correlationId:
+          logger:

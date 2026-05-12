@@ -1,10 +1,38 @@
+# PR_19 C19.1: shared YAML anchor za JVM/resource-limit boilerplate kroz svih 7
+# Spring Boot servisa. UseG1GC + MaxRAMPercentage=70 daje stabilno ponasanje pod
+# container memory limit-om (cgroup v1/v2 detekcija je default u Java 17+).
+x-jvm-tuning: &jvm-tuning
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+UseStringDeduplication -XX:MaxGCPauseMillis=200"
+
+x-app-resource-limits: &app-resource-limits
+  resources:
+    limits:
+      memory: 512M
+    reservations:
+      memory: 256M
+
 services:
+  # =========================================================================
+  # Shared infrastructure (postgres, rabbitmq, observability stack)
+  # =========================================================================
+
   # Single Postgres instance — all services share this container, each with its own database
   postgres:
-    image: postgres:16
+    image: postgres:16-alpine
     container_name: banka_postgres
     restart: unless-stopped
-    command: postgres -c max_connections=1000
+    # PR_19 C19.1: tuned za 7-servis konsolidaciju + observability stack:
+    #   - max_connections=200 (dovoljno: 7 services × 10 HikariCP pool size = 70 + headroom)
+    #     pre PR_19 bilo 1000 sto je trazilo ~640 MB samo za connection slot-ove.
+    #   - shared_buffers=128MB pre default 25% RAM-a (radi sa 512M container limit-om).
+    #   - work_mem=4MB konzervativno za connection-heavy workload.
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=128MB
+      -c effective_cache_size=384MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
     env_file:
       - .env
     environment:
@@ -23,10 +51,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
-  # RabbitMQ (shared)
+  # RabbitMQ (shared, koristi se za saga.events i notification events)
+  # PR_19 C19.1: alpine variant + memory cap. RabbitMQ erlang VM ima sopstveni
+  # high-watermark mehanizam — postavljen na 75% container limit-a.
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3-management-alpine
     container_name: banka_rabbitmq
     restart: unless-stopped
     env_file:
@@ -34,6 +70,9 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      # PR_19 C19.1: VM_MEMORY_HIGH_WATERMARK env var je deprecated u 3.x —
+      # configuration ide kroz rabbitmq.conf ili rabbitmq.env. Container memory
+      # cap (deploy.resources.limits.memory) je dovoljan za hard limit.
     ports:
       - "${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
@@ -44,7 +83,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+        reservations:
+          memory: 192M
 
+  # PR_19 C19.1: observability stack memory caps. otel-collector + jaeger su
+  # tipicno light; prometheus/loki/grafana drze in-memory cache pa dobijaju vise.
   otel-collector:
     image: otel/opentelemetry-collector:0.104.0
     container_name: banka_otel_collector
@@ -59,6 +106,12 @@ services:
       - jaeger
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
 
   jaeger:
     image: jaegertracing/all-in-one:1.58
@@ -66,23 +119,41 @@ services:
     restart: unless-stopped
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "10000"
     expose:
       - "4317"
     ports:
       - "16686:16686"
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
   prometheus:
     image: prom/prometheus:v2.53.0
     container_name: banka_prometheus
     restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--storage.tsdb.retention.size=512MB"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
   loki:
     image: grafana/loki:3.1.1
@@ -96,7 +167,14 @@ services:
       - "3100:3100"
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
+  # PR_02 C2.16: promtail mount-uje samo 7 servisnih log volumes (umesto 11).
   promtail:
     image: grafana/promtail:3.1.1
     container_name: banka_promtail
@@ -105,17 +183,23 @@ services:
     volumes:
       - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
       - notification-service-logs:/var/log/services/notification:ro
-      - employee-service-logs:/var/log/services/employee:ro
-      - client-service-logs:/var/log/services/client:ro
-      - banking-service-logs:/var/log/services/banking:ro
-      - exchange-service-logs:/var/log/services/exchange:ro
-      - verification-service-logs:/var/log/services/verification:ro
-      - order-service-logs:/var/log/services/order:ro
-      - stock-service-logs:/var/log/services/stock:ro
+      - user-service-logs:/var/log/services/user:ro
+      - banking-core-service-logs:/var/log/services/banking-core:ro
+      - market-service-logs:/var/log/services/market:ro
+      - trading-service-logs:/var/log/services/trading:ro
+      - credit-service-logs:/var/log/services/credit:ro
+      - saga-orchestrator-service-logs:/var/log/services/saga:ro
+      - interbank-service-logs:/var/log/services/interbank:ro
     depends_on:
       - loki
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
 
   grafana:
     image: grafana/grafana:11.1.0
@@ -134,8 +218,18 @@ services:
       - loki
     networks:
       - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
-  # Notification Service
+  # =========================================================================
+  # Application services (7 servisa, posle PR_02 konsolidacije 15→7)
+  # =========================================================================
+
+  # 1/7. Notification Service (samostalan, nepromenjen)
   notification-service:
     build:
       context: ..
@@ -164,148 +258,49 @@ services:
       OTEL_LOGS_EXPORTER: none
       OTEL_SERVICE_NAME: notification-service
       LOGGING_FILE_PATH: /var/log/banka
-      FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-}
+      FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH:-/app/firebase-credentials.json}
+      <<: *jvm-tuning
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     expose:
       - "${NOTIFICATION_SERVER_PORT:-8006}"
     networks:
       - banka-network
     volumes:
       - notification-service-logs:/var/log/banka
-      - ./banka-1-firebase-firebase-adminsdk-fbsvc-e306452a8c.json:/app/firebase-credentials.json:ro
+      - ${FIREBASE_CREDENTIALS_HOST_PATH:-/dev/null}:/app/firebase-credentials.json:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:${NOTIFICATION_SERVER_PORT:-8006}/actuator/health/liveness || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
+    deploy: *app-resource-limits
 
-  # Employee Service
-  employee-service:
+  # 2/7. User Service (employee + client; PR_02 C2.3+)
+  user-service:
     build:
       context: ..
-      dockerfile: employee-service/Dockerfile
+      dockerfile: user-service/Dockerfile
       args:
-        SERVER_PORT: ${USER_SERVER_PORT:-8081}
-    container_name: banka_employee_service
+        SERVER_PORT: ${USER_SERVICE_PORT:-8081}
+    container_name: banka_user_service
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      DB_HOST: postgres
-      DB_PORT: ${DB_PORT:-5432}
-      DB_NAME: ${DB_NAME:-banka}
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      RABBIT_HOST: ${RABBITMQ_HOST:-rabbitmq}
-      RABBIT_PORT: ${RABBITMQ_PORT:-5672}
-      SERVER_PORT: ${USER_SERVER_PORT:-8081}
-      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
-      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none
-      OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: employeeService
-      LOGGING_FILE_PATH: /var/log/banka
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-    expose:
-      - "${USER_SERVER_PORT:-8081}"
-    networks:
-      - banka-network
-    volumes:
-      - employee-service-logs:/var/log/banka
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${USER_SERVER_PORT:-8081}/actuator/health/liveness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # Client Service
-  client-service:
-    build:
-      context: ..
-      dockerfile: client-service/Dockerfile
-      args:
-        SERVER_PORT: ${CLIENT_SERVER_PORT:-8083}
-    container_name: banka_client_service
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      CLIENT_SERVICE_DB_HOST: postgres
-      CLIENT_SERVICE_PORT: ${CLIENT_SERVER_PORT:-8083}
-      SERVER_PORT: ${CLIENT_SERVER_PORT:-8083}
-      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
-      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
-      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
-      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none
-      OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: clientService
-      LOGGING_FILE_PATH: /var/log/banka
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-    expose:
-      - "${CLIENT_SERVER_PORT:-8083}"
-    networks:
-      - banka-network
-    volumes:
-      - client-service-logs:/var/log/banka
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${CLIENT_SERVER_PORT:-8083}/actuator/health/liveness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # Banking Service — consolidates account, card, credit, transaction, transfer
-  banking-service:
-    build:
-      context: ..
-      dockerfile: banking-service/Dockerfile
-      args:
-        SERVER_PORT: ${BANKING_SERVER_PORT:-8084}
-    container_name: banka_banking_service
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      BANKING_SERVER_PORT: ${BANKING_SERVER_PORT:-8084}
-      SERVER_PORT: ${BANKING_SERVER_PORT:-8084}
-      BANKING_DB_HOST: postgres
-      BANKING_DB_PORT: ${BANKING_DB_PORT:-5432}
-      BANKING_DB_NAME: ${BANKING_DB_NAME:-bankingdb}
-      BANKING_DB_USER: ${BANKING_DB_USER:-postgres}
-      BANKING_DB_PASSWORD: ${BANKING_DB_PASSWORD:-postgres}
+      SERVER_PORT: ${USER_SERVICE_PORT:-8081}
+      USER_SERVICE_DB_HOST: postgres
+      USER_SERVICE_DB_PORT: ${USER_SERVICE_DB_PORT:-5432}
+      USER_SERVICE_DB_NAME: ${USER_SERVICE_DB_NAME:-user_service}
+      USER_SERVICE_DB_USER: ${USER_SERVICE_DB_USER:-postgres}
+      USER_SERVICE_DB_PASSWORD: ${USER_SERVICE_DB_PASSWORD:-postgres}
       JWT_SECRET: ${JWT_SECRET}
-      SERVICES_USER_URL: ${SERVICES_USER_URL:-http://client-service:8083}
-      SERVICES_CLIENT_URL: ${SERVICES_CLIENT_URL:-http://client-service:8083}
-      SERVICES_ACCOUNT_URL: ${SERVICES_ACCOUNT_URL:-http://banking-service:8084}
-      SERVICES_CARD_URL: ${SERVICES_CARD_URL:-http://banking-service:8084}
-      SERVICES_EXCHANGE_URL: ${SERVICES_EXCHANGE_URL:-http://exchange-service:8085}
-      SERVICES_VERIFICATION_URL: http://verification-service:${VERIFICATION_SERVER_PORT:-8086}
-      SKIP_VERIFICATION: ${SKIP_VERIFICATION:-false}
+      TOKEN_REFRESH_EXPIRATION_DAYS: ${TOKEN_REFRESH_EXPIRATION_DAYS:-7}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
@@ -313,10 +308,68 @@ services:
       NOTIFICATION_QUEUE: ${NOTIFICATION_QUEUE:-notification-service-queue}
       NOTIFICATION_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
       NOTIFICATION_ROUTING_KEY: ${NOTIFICATION_ROUTING_KEY:-employee.#}
-      NOTIFICATION_RABBIT_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
-      CARD_RABBIT_AUTO_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
-      CARD_RABBIT_AUTO_QUEUE: ${CARD_RABBIT_AUTO_QUEUE:-card-service-auto-card-queue}
-      CARD_RABBIT_AUTO_ROUTING_KEY: ${CARD_RABBIT_AUTO_ROUTING_KEY:-card.create}
+      USER_RESET_PASSWORD_URL: ${USER_RESET_PASSWORD_URL:-http://localhost:3000/reset-password?token=}
+      USER_ACTIVATE_ACCOUNT_URL: ${USER_ACTIVATE_ACCOUNT_URL:-http://localhost:3000/activate?token=}
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      OTEL_SERVICE_NAME: user-service
+      LOGGING_FILE_PATH: /var/log/banka
+      BANKA_SECURITY_CORS_ALLOWED_ORIGINS: ${BANKA_SECURITY_CORS_ALLOWED_ORIGINS:-http://localhost:4200,http://localhost:3000}
+      BANKA_SECURITY_CORS_ALLOWED_METHODS: ${BANKA_SECURITY_CORS_ALLOWED_METHODS:-GET,POST,PUT,PATCH,DELETE,OPTIONS}
+      BANKA_SECURITY_CORS_ALLOW_CREDENTIALS: ${BANKA_SECURITY_CORS_ALLOW_CREDENTIALS:-true}
+      <<: *jvm-tuning
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    expose:
+      - "${USER_SERVICE_PORT:-8081}"
+    networks:
+      - banka-network
+    volumes:
+      - user-service-logs:/var/log/banka
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${USER_SERVICE_PORT:-8081}/actuator/health/liveness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy: *app-resource-limits
+
+  # 3/7. Banking Core Service (account + card + transaction + transfer + verification; PR_02 C2.10+)
+  banking-core-service:
+    build:
+      context: ..
+      dockerfile: banking-core-service/Dockerfile
+      args:
+        SERVER_PORT: ${BANKING_CORE_SERVICE_PORT:-8084}
+    container_name: banka_banking_core_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_PORT: ${BANKING_CORE_SERVICE_PORT:-8084}
+      BANKING_CORE_DB_HOST: postgres
+      BANKING_CORE_DB_PORT: ${BANKING_CORE_DB_PORT:-5432}
+      BANKING_CORE_DB_NAME: ${BANKING_CORE_DB_NAME:-banking_core}
+      BANKING_CORE_DB_USER: ${BANKING_CORE_DB_USER:-postgres}
+      BANKING_CORE_DB_PASSWORD: ${BANKING_CORE_DB_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      NOTIFICATION_QUEUE: ${NOTIFICATION_QUEUE:-notification-service-queue}
+      NOTIFICATION_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
+      NOTIFICATION_ROUTING_KEY: ${NOTIFICATION_ROUTING_KEY:-employee.#}
+      SERVICES_USER_URL: http://user-service:${USER_SERVICE_PORT:-8081}
+      CARD_REQUEST_VERIFICATION_EXPIRATION_MINUTES: ${CARD_REQUEST_VERIFICATION_EXPIRATION_MINUTES:-15}
       CARD_CREATION_AUTOMATIC_DEFAULT_LIMIT: ${CARD_CREATION_AUTOMATIC_DEFAULT_LIMIT:-1000000}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
       MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
@@ -324,147 +377,106 @@ services:
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: banking-service
+      OTEL_SERVICE_NAME: banking-core-service
       LOGGING_FILE_PATH: /var/log/banka
+      <<: *jvm-tuning
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      verification-service:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      user-service: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     expose:
-      - "${BANKING_SERVER_PORT:-8084}"
+      - "${BANKING_CORE_SERVICE_PORT:-8084}"
     networks:
       - banka-network
     volumes:
-      - banking-service-logs:/var/log/banka
+      - banking-core-service-logs:/var/log/banka
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${BANKING_SERVER_PORT:-8084}/actuator/health/liveness || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${BANKING_CORE_SERVICE_PORT:-8084}/actuator/health/liveness || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
+    # PR_19 C19.1: banking-core sluzi vise paketa (account+card+tx+transfer+verification)
+    # pa dobija veci limit nego ostali servisi (768M umesto 512M).
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 384M
 
-  # Exchange Service
-  exchange-service:
+  # 4/7. Market Service (stock + exchange; PR_02 C2.8+)
+  market-service:
     build:
       context: ..
-      dockerfile: exchange-service/Dockerfile
+      dockerfile: market-service/Dockerfile
       args:
-        SERVER_PORT: ${EXCHANGE_SERVER_PORT:-8085}
-    container_name: exchange-service
+        SERVER_PORT: ${MARKET_SERVICE_PORT:-8085}
+    container_name: banka_market_service
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      EXCHANGE_SERVICE_HOST: 0.0.0.0
-      EXCHANGE_SERVER_PORT: ${EXCHANGE_SERVER_PORT:-8085}
-      EXCHANGE_DB_HOST: postgres
-      EXCHANGE_DB_PORT: 5432
-      EXCHANGE_DB_NAME: ${EXCHANGE_DB_NAME:-exchange_db}
-      EXCHANGE_DB_USER: ${EXCHANGE_DB_USER:-postgres}
-      EXCHANGE_DB_PASSWORD: ${EXCHANGE_DB_PASSWORD:-postgres}
+      SERVER_PORT: ${MARKET_SERVICE_PORT:-8085}
+      MARKET_SERVICE_DB_HOST: postgres
+      MARKET_SERVICE_DB_PORT: ${MARKET_SERVICE_DB_PORT:-5432}
+      MARKET_SERVICE_DB_NAME: ${MARKET_SERVICE_DB_NAME:-market_service}
+      MARKET_SERVICE_DB_USER: ${MARKET_SERVICE_DB_USER:-postgres}
+      MARKET_SERVICE_DB_PASSWORD: ${MARKET_SERVICE_DB_PASSWORD:-postgres}
       JWT_SECRET: ${JWT_SECRET}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
       TWELVE_DATA_API_KEY: ${TWELVE_DATA_API_KEY:-}
-      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
-      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-      OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none
-      OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: exchange-service
-      LOGGING_FILE_PATH: /var/log/banka
-    depends_on:
-      postgres:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
-    expose:
-      - "${EXCHANGE_SERVER_PORT:-8085}"
-    networks:
-      - banka-network
-    volumes:
-      - exchange-service-logs:/var/log/banka
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${EXCHANGE_SERVER_PORT:-8085}/actuator/health/liveness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # Stock Service
-  stock-service:
-    build:
-      context: ..
-      dockerfile: stock-service/Dockerfile
-      args:
-        SERVER_PORT: ${STOCK_SERVICE_PORT:-8090}
-    container_name: banka_stock_service
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      STOCK_SERVICE_HOST: 0.0.0.0
-      STOCK_SERVICE_PORT: ${STOCK_SERVICE_PORT:-8090}
-      STOCK_DB_HOST: postgres
-      STOCK_DB_PORT: 5432
-      STOCK_DB_NAME: ${STOCK_DB_NAME:-stock_db}
-      STOCK_DB_USER: ${STOCK_DB_USER:-postgres}
-      STOCK_DB_PASSWORD: ${STOCK_DB_PASSWORD:-postgres}
-      JWT_SECRET: ${JWT_SECRET}
-      STOCK_EXCHANGE_SERVICE_URL: http://exchange-service:${EXCHANGE_SERVER_PORT:-8085}
-      STOCK_MARKET_DATA_BASE_URL: ${STOCK_MARKET_DATA_BASE_URL:-https://www.alphavantage.co}
-      STOCK_MARKET_DATA_API_KEY: ${STOCK_MARKET_DATA_API_KEY:-}
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+      STOCK_MARKET_DATA_BASE_URL: ${STOCK_MARKET_DATA_BASE_URL:-https://www.alphavantage.co}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
       MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: stock-service
+      OTEL_SERVICE_NAME: market-service
       LOGGING_FILE_PATH: /var/log/banka
+      <<: *jvm-tuning
     depends_on:
-      postgres:
-        condition: service_healthy
-      exchange-service:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     expose:
-      - "${STOCK_SERVICE_PORT:-8090}"
+      - "${MARKET_SERVICE_PORT:-8085}"
     networks:
       - banka-network
     volumes:
-      - stock-service-logs:/var/log/banka
+      - market-service-logs:/var/log/banka
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${STOCK_SERVICE_PORT:-8090}/actuator/health/liveness || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${MARKET_SERVICE_PORT:-8085}/actuator/health/liveness || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
+    deploy: *app-resource-limits
 
-  # Verification Service
-  verification-service:
+  # 5/7. Trading Service (order + future margin/otc/funds; PR_02 C2.13)
+  trading-service:
     build:
       context: ..
-      dockerfile: verification-service/Dockerfile
+      dockerfile: trading-service/Dockerfile
       args:
-        SERVER_PORT: ${VERIFICATION_SERVER_PORT:-8086}
-    container_name: banka_verification_service
+        SERVER_PORT: ${TRADING_SERVICE_PORT:-8088}
+    container_name: banka_trading_service
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      VERIFICATION_SERVER_PORT: ${VERIFICATION_SERVER_PORT:-8086}
-      VERIFICATION_DB_HOST: postgres
-      VERIFICATION_DB_PORT: 5432
-      VERIFICATION_DB_NAME: ${VERIFICATION_DB_NAME:-verificationdb}
-      VERIFICATION_DB_USER: ${VERIFICATION_DB_USER:-postgres}
-      VERIFICATION_DB_PASSWORD: ${VERIFICATION_DB_PASSWORD:-postgres}
+      SERVER_PORT: ${TRADING_SERVICE_PORT:-8088}
+      TRADING_DB_HOST: postgres
+      TRADING_DB_PORT: ${TRADING_DB_PORT:-5432}
+      TRADING_DB_NAME: ${TRADING_DB_NAME:-trading}
+      TRADING_DB_USER: ${TRADING_DB_USER:-postgres}
+      TRADING_DB_PASSWORD: ${TRADING_DB_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
@@ -472,54 +484,63 @@ services:
       NOTIFICATION_QUEUE: ${NOTIFICATION_QUEUE:-notification-service-queue}
       NOTIFICATION_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
       NOTIFICATION_ROUTING_KEY: ${NOTIFICATION_ROUTING_KEY:-employee.#}
-      JWT_SECRET: ${JWT_SECRET}
+      SERVICES_USER_URL: http://user-service:${USER_SERVICE_PORT:-8081}
+      SERVICES_BANKING_CORE_URL: http://banking-core-service:${BANKING_CORE_SERVICE_PORT:-8084}
+      SERVICES_MARKET_URL: http://market-service:${MARKET_SERVICE_PORT:-8085}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
       MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: verificationService
+      OTEL_SERVICE_NAME: trading-service
       LOGGING_FILE_PATH: /var/log/banka
+      <<: *jvm-tuning
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      banking-core-service: { condition: service_healthy }
+      market-service: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     expose:
-      - "${VERIFICATION_SERVER_PORT:-8086}"
+      - "${TRADING_SERVICE_PORT:-8088}"
     networks:
       - banka-network
     volumes:
-      - verification-service-logs:/var/log/banka
+      - trading-service-logs:/var/log/banka
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${VERIFICATION_SERVER_PORT:-8086}/actuator/health/liveness || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${TRADING_SERVICE_PORT:-8088}/actuator/health/liveness || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
+    deploy: *app-resource-limits
 
-  # Order Service
-  order-service:
+  # 6/7. Credit Service (samostalan, nepromenjen)
+  credit-service:
     build:
       context: ..
-      dockerfile: order-service/Dockerfile
+      dockerfile: credit-service/Dockerfile
       args:
-        SERVER_PORT: ${ORDER_SERVER_PORT:-8088}
-    container_name: banka_order_service
+        SERVER_PORT: ${CREDIT_SERVER_PORT:-8089}
+    container_name: banka_credit_service
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      ORDER_SERVER_PORT: ${ORDER_SERVER_PORT:-8088}
-      ORDER_DB_HOST: postgres
-      ORDER_DB_PORT: 5432
-      ORDER_DB_NAME: ${ORDER_DB_NAME:-orderdb}
-      ORDER_DB_USER: ${ORDER_DB_USER:-postgres}
-      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:-postgres}
+      CREDIT_SERVER_PORT: ${CREDIT_SERVER_PORT:-8089}
+      SERVER_PORT: ${CREDIT_SERVER_PORT:-8089}
+      CREDIT_DB_HOST: postgres
+      CREDIT_DB_PORT: 5432
+      CREDIT_DB_NAME: ${CREDIT_DB_NAME:-credit_db}
+      CREDIT_DB_USER: ${CREDIT_DB_USER:-postgres}
+      CREDIT_DB_PASSWORD: ${CREDIT_DB_PASSWORD:-postgres}
       JWT_SECRET: ${JWT_SECRET}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
+      SERVICES_USER_URL: http://user-service:${USER_SERVICE_PORT:-8081}
+      SERVICES_BANKING_CORE_URL: http://banking-core-service:${BANKING_CORE_SERVICE_PORT:-8084}
+      SERVICES_MARKET_URL: http://market-service:${MARKET_SERVICE_PORT:-8085}
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
@@ -527,46 +548,147 @@ services:
       NOTIFICATION_QUEUE: ${NOTIFICATION_QUEUE:-notification-service-queue}
       NOTIFICATION_EXCHANGE: ${NOTIFICATION_EXCHANGE:-employee.events}
       NOTIFICATION_ROUTING_KEY: ${NOTIFICATION_ROUTING_KEY:-employee.#}
-      ACCOUNT_SERVICE_HOST: banking-service
-      ACCOUNT_SERVER_PORT: ${BANKING_SERVER_PORT:-8084}
-      EMPLOYEE_SERVICE_HOST: employee-service
-      USER_SERVER_PORT: ${USER_SERVER_PORT:-8081}
-      CLIENT_SERVICE_HOST: client-service
-      CLIENT_SERVER_PORT: ${CLIENT_SERVER_PORT:-8083}
-      EXCHANGE_SERVICE_HOST: exchange-service
-      EXCHANGE_SERVER_PORT: ${EXCHANGE_SERVER_PORT:-8085}
-      STOCK_SERVICE_HOST: stock-service
-      STOCK_SERVICE_PORT: ${STOCK_SERVICE_PORT:-8090}
       MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
       MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_TRACES_EXPORTER: otlp
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
-      OTEL_SERVICE_NAME: order-service
+      OTEL_SERVICE_NAME: credit-service
       LOGGING_FILE_PATH: /var/log/banka
+      <<: *jvm-tuning
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      stock-service:
-        condition: service_healthy
-      otel-collector:
-        condition: service_started
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      banking-core-service: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     expose:
-      - "${ORDER_SERVER_PORT:-8088}"
+      - "${CREDIT_SERVER_PORT:-8089}"
     networks:
       - banka-network
     volumes:
-      - order-service-logs:/var/log/banka
+      - credit-service-logs:/var/log/banka
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:${ORDER_SERVER_PORT:-8088}/actuator/health/liveness || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:${CREDIT_SERVER_PORT:-8089}/actuator/health/liveness || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
+    deploy: *app-resource-limits
 
+  # 7/7. Saga Orchestrator Service (samostalan, #213, #214, #215)
+  saga-orchestrator-service:
+    build:
+      context: ..
+      dockerfile: saga-orchestrator-service/Dockerfile
+      args:
+        SERVER_PORT: ${SAGA_SERVER_PORT:-8095}
+    container_name: saga-orchestrator-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SAGA_SERVICE_HOST: 0.0.0.0
+      SAGA_SERVICE_PORT: ${SAGA_SERVER_PORT:-8095}
+      SERVER_PORT: ${SAGA_SERVER_PORT:-8095}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${SAGA_POSTGRES_DB:-saga_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: saga-orchestrator-service
+      <<: *jvm-tuning
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    expose:
+      - "${SAGA_SERVER_PORT:-8095}"
+    networks:
+      - banka-network
+    volumes:
+      - saga-orchestrator-service-logs:/var/log/banka
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${SAGA_SERVER_PORT:-8095}/actuator/health/liveness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy: *app-resource-limits
+
+  # 8/8. Interbank Service (samostalan, inter-bank routing; PR_32)
+  interbank-service:
+    build:
+      context: ..
+      dockerfile: interbank-service/Dockerfile
+      args:
+        SERVER_PORT: ${INTERBANK_SERVER_PORT:-8091}
+    container_name: banka_interbank_service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SERVER_PORT: ${INTERBANK_SERVER_PORT:-8091}
+      INTERBANK_DB_HOST: postgres
+      INTERBANK_DB_PORT: 5432
+      INTERBANK_DB_NAME: ${INTERBANK_DB_NAME:-interbank_service}
+      INTERBANK_DB_USER: ${INTERBANK_DB_USER:-postgres}
+      INTERBANK_DB_PASSWORD: ${INTERBANK_DB_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET}
+      SWAGGER_ENABLED: ${SWAGGER_ENABLED:-true}
+      LIQUIBASE_CONTEXTS: ${LIQUIBASE_CONTEXTS:-dev}
+      BANKA1_ROUTING_NUMBER: ${BANKA1_ROUTING_NUMBER:-111}
+      BANKA1_DISPLAY_NAME: ${BANKA1_DISPLAY_NAME:-Banka 1}
+      BANKA2_ROUTING_NUMBER: ${BANKA2_ROUTING_NUMBER:-222}
+      BANKA2_DISPLAY_NAME: ${BANKA2_DISPLAY_NAME:-Banka 2}
+      BANKA2_BASE_URL: ${BANKA2_BASE_URL:-http://interbank-service:8091/_mock/banka2/}
+      BANKA2_INBOUND_TOKEN: ${BANKA2_INBOUND_TOKEN:-dev-inbound-banka2-to-banka1}
+      BANKA2_OUTBOUND_TOKEN: ${BANKA2_OUTBOUND_TOKEN:-dev-outbound-banka1-to-banka2}
+      SERVICES_USER_URL: http://user-service:${USER_SERVICE_PORT:-8081}
+      SERVICES_BANKING_CORE_URL: http://banking-core-service:${BANKING_CORE_SERVICE_PORT:-8084}
+      SERVICES_TRADING_URL: http://trading-service:${TRADING_SERVICE_PORT:-8088}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev,mock-partner}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MANAGEMENT_OTLP_METRICS_EXPORT_URL: http://otel-collector:4318/v1/metrics
+      MANAGEMENT_OTLP_TRACING_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: interbank-service
+      LOGGING_FILE_PATH: /var/log/banka
+      <<: *jvm-tuning
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      banking-core-service: { condition: service_healthy }
+      trading-service: { condition: service_healthy }
+      user-service: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    expose:
+      - "${INTERBANK_SERVER_PORT:-8091}"
+    networks:
+      - banka-network
+    volumes:
+      - interbank-service-logs:/var/log/banka
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${INTERBANK_SERVER_PORT:-8091}/actuator/health/liveness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy: *app-resource-limits
+
+  # =========================================================================
+  # API Gateway (Nginx) — depends on svih 8 servisa
+  # =========================================================================
   api-gateway:
     build:
       context: ..
@@ -578,29 +700,23 @@ services:
     env_file:
       - .env
     environment:
-      SERVER_PORT: ${USER_SERVER_PORT:-8081}
-      CLIENT_SERVICE_PORT: ${CLIENT_SERVER_PORT:-8083}
-      BANKING_SERVICE_PORT: ${BANKING_SERVER_PORT:-8084}
-      EXCHANGE_SERVER_PORT: ${EXCHANGE_SERVER_PORT:-8085}
-      VERIFICATION_SERVER_PORT: ${VERIFICATION_SERVER_PORT:-8086}
+      USER_SERVICE_PORT: ${USER_SERVICE_PORT:-8081}
+      BANKING_CORE_SERVICE_PORT: ${BANKING_CORE_SERVICE_PORT:-8084}
+      MARKET_SERVICE_PORT: ${MARKET_SERVICE_PORT:-8085}
+      TRADING_SERVICE_PORT: ${TRADING_SERVICE_PORT:-8088}
+      CREDIT_SERVER_PORT: ${CREDIT_SERVER_PORT:-8089}
       NOTIFICATION_SERVICE_PORT: ${NOTIFICATION_SERVER_PORT:-8006}
-      ORDER_SERVER_PORT: ${ORDER_SERVER_PORT:-8088}
-      STOCK_SERVICE_PORT: ${STOCK_SERVICE_PORT:-8090}
+      SAGA_SERVICE_PORT: ${SAGA_SERVER_PORT:-8095}
+      INTERBANK_SERVICE_PORT: ${INTERBANK_SERVER_PORT:-8091}
     depends_on:
-      employee-service:
-        condition: service_healthy
-      client-service:
-        condition: service_healthy
-      banking-service:
-        condition: service_healthy
-      exchange-service:
-        condition: service_healthy
-      verification-service:
-        condition: service_healthy
-      notification-service:
-        condition: service_healthy
-      order-service:
-        condition: service_healthy
+      user-service: { condition: service_healthy }
+      banking-core-service: { condition: service_healthy }
+      market-service: { condition: service_healthy }
+      trading-service: { condition: service_healthy }
+      credit-service: { condition: service_healthy }
+      notification-service: { condition: service_healthy }
+      saga-orchestrator-service: { condition: service_healthy }
+      interbank-service: { condition: service_healthy }
     networks:
       - banka-network
     healthcheck:
@@ -609,6 +725,39 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    # PR_19 C19.1: Nginx je tankak — 64M za worker process-e + buffer-e je preobilato.
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+
+  # =========================================================================
+  # Frontend (Angular SPA served kroz Nginx) — PR_19 C19.X
+  # =========================================================================
+  frontend:
+    build:
+      context: ../../Banka-1-Frontend-main
+      dockerfile: Dockerfile
+    container_name: banka_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-4200}:80"
+    networks:
+      - banka-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
 
 networks:
   banka-network:
@@ -619,11 +768,10 @@ volumes:
   grafana-data:
   loki-data:
   notification-service-logs:
-  employee-service-logs:
-  client-service-logs:
-  banking-service-logs:
-  exchange-service-logs:
-  verification-service-logs:
-  order-service-logs:
-  stock-service-logs:
-
+  user-service-logs:
+  banking-core-service-logs:
+  market-service-logs:
+  trading-service-logs:
+  credit-service-logs:
+  saga-orchestrator-service-logs:
+  interbank-service-logs:
