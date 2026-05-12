@@ -4,19 +4,45 @@ plugins {
 
 rootProject.name = 'Banka-1-Backend'
 
+// --- Zajednicke biblioteke -------------------------------------------------
 include 'company-observability-starter'
-include 'notification-service'
 include 'security-lib'
+
+// --- Stari moduli (operativna biznis logika) ------------------------------
+// Spec napomena (PR_14 C14.1): PR_02 konsolidacija je pocela ali nije zavrsena.
+// Stara biznis logika (employee, client, account, card, transaction, transfer,
+// verification, order, stock, exchange) je i dalje u ovim modulima — Liquibase
+// migracije, JPA entiteti, controlleri. Sve dok to ne bude pravi premešteno u
+// nove module (user-service, banking-core-service, market-service, trading-service),
+// stari moduli MORAJU da budu deo build-a.
 include 'employee-service'
 include 'client-service'
 include 'account-service'
 include 'card-service'
-include 'credit-service'
-include 'transfer-service'
-include 'exchange-service'
-include 'verification-service'
 include 'transaction-service'
+include 'transfer-service'
+include 'verification-service'
+include 'exchange-service'
+include 'stock-service'
 include 'order-service'
 
+// --- Konsolidovani moduli (PR_02 skelet + PR_03/PR_04 nove fičure) --------
+// Ovi moduli su dobili nove fičure (margin, OTC, funds, saga) ali ne sadrze
+// preneti stari kod. Auto-config kroz security-lib auto-loaduje JmbgEncryptor,
+// Resilience4j, ShedLock, koje stari moduli takodje koriste.
+include 'user-service'
+include 'market-service'
+include 'banking-core-service'
+include 'trading-service'
 
-include 'stock-service'
+// --- Samostalni moduli (nepromenjeni od pocetka) --------------------------
+include 'notification-service'
+include 'credit-service'
+include 'saga-orchestrator-service'
+
+// PR_32: novi inter-bank protokol servis (port 8091, baza interbank_service).
+// 2PC koordinator + OTC §3 routes ka partner bankama (Banka 2 / Tim 2).
+include 'interbank-service'
+
+// api-gateway: Nginx kontejner — nije Gradle modul (nema build.gradle.kts),
+// pa se ne ukljucuje u settings.gradle. Build je iskljucivo kroz docker-compose.

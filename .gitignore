@@ -72,9 +72,13 @@ application-local.properties
 application-local.yml
 application-local.yaml
 
-# Firebase service account keys
+# Firebase service account keys (never commit any of these)
 *-firebase-adminsdk-*.json
 google-services.json
+**/firebase-credentials.json
+**/firebase-service-account*.json
+firebase.json
+setup/banka-1-firebase-firebase-adminsdk-*
 
 # Test reports & coverage
 test-results/
