@@ -46,13 +46,9 @@ dependencies {
 	compileOnly("org.projectlombok:lombok")
 	runtimeOnly("org.postgresql:postgresql")
 	annotationProcessor("org.projectlombok:lombok")
-	testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-amqp-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-data-jpa-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-liquibase-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-security-test")
+	// PR_16 C16.1: phantom test starter-i uklonjeni.
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
-	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+	testImplementation("org.springframework.security:spring-security-test")
 	testRuntimeOnly("com.h2database:h2")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -88,3 +84,8 @@ checkstyle {
 tasks.withType<org.gradle.api.plugins.quality.Checkstyle>().configureEach {
 	ignoreFailures = false
 }
+
+// PR_19 library mode: konsolidovani service (user/banking-core/market/trading)
+// koristi ovaj modul kao project() dep, pa nam treba klasican "jar" artifact, ne fat bootJar.
+tasks.bootJar { enabled = false }
+tasks.jar { enabled = true; archiveClassifier.set("") }

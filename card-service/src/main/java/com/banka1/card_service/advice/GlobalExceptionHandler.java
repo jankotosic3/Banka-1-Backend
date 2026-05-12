@@ -6,6 +6,8 @@ import com.banka1.card_service.exception.ErrorCode;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -78,6 +80,23 @@ public class GlobalExceptionHandler {
                 validationErrors
         );
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * Handles Spring Security access denial.
+     * <p>
+     * Spring Security 5: @Secured / @PreAuthorize -> AccessDeniedException.
+     * Spring Security 6: @PreAuthorize -> AuthorizationDeniedException (subclass of AccessDeniedException).
+     * Explicit handler prevents fall-through to the generic Exception catch-all (which would return 500).
+     */
+    @ExceptionHandler({AccessDeniedException.class, AuthorizationDeniedException.class})
+    public ResponseEntity<ErrorResponseDto> handleAccessDenied(AccessDeniedException ex) {
+        ErrorResponseDto error = new ErrorResponseDto(
+                "ERR_FORBIDDEN",
+                "Access denied",
+                "You do not have permission to perform this action."
+        );
+        return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
     }
 
     @ExceptionHandler(Exception.class)

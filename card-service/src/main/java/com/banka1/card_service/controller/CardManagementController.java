@@ -1,13 +1,17 @@
 package com.banka1.card_service.controller;
 
 import com.banka1.card_service.dto.card_management.request.UpdateCardLimitDTO;
+import com.banka1.card_service.dto.card_management.response.CardAdminSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardDetailDTO;
 import com.banka1.card_service.dto.card_management.response.CardInternalSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardSummaryDTO;
 import com.banka1.card_service.service.CardLifecycleService;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -17,6 +21,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -34,6 +40,7 @@ import java.util.List;
  * administrative lifecycle transitions such as unblock and deactivate.
  */
 @RestController
+@RequestMapping("/api/cards")
 @RequiredArgsConstructor
 public class CardManagementController {
 
@@ -158,6 +165,32 @@ public class CardManagementController {
     @PreAuthorize("hasRole('BASIC')")
     public ResponseEntity<List<CardSummaryDTO>> getCardsByAccount(@PathVariable String accountNumber) {
         return ResponseEntity.ok(cardLifecycleService.getCardsByAccountNumber(accountNumber));
+    }
+
+    /**
+     * Returns every card in the bank in a paginated, filterable view used by the
+     * employee "Portal za upravljanje karticama" (PR_32, Celina 2).
+     *
+     * <p>Card numbers in the response are masked; the CVV hash is never returned.
+     * Sorting is fixed to {@code id ASC} so paging windows are stable.
+     *
+     * @param page zero-based page index (default {@code 0}, must be {@code >= 0})
+     * @param size page size (default {@code 10}, must be in {@code [1, 100]})
+     * @param status optional status filter (ACTIVE / BLOCKED / DEACTIVATED, case-insensitive)
+     * @param search optional case-insensitive substring matched against the card
+     *               number, the linked account number or the brand label
+     * @return page of admin card summaries
+     */
+    @GetMapping("/all")
+    @Operation(summary = "List all cards in the bank with filtering")
+    @PreAuthorize("hasRole('BASIC')")
+    public ResponseEntity<Page<CardAdminSummaryDTO>> getAllCards(
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(100) int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search
+    ) {
+        return ResponseEntity.ok(cardLifecycleService.getAllCardsPaginated(page, size, status, search));
     }
 
     // ############################################################

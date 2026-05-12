@@ -6,14 +6,14 @@ banka.security.id=id
 banka.security.roles-claim=roles
 #ms
 banka.security.expiration-time=3600000
-#months
-token.refresh.expiration-time=1
+#days (PR_01 C1.7: smanjen sa 1 mesec)
+token.refresh.expiration-time=${TOKEN_REFRESH_EXPIRATION_DAYS:7}
 #minutes
 token.confirmation.expiration-time=15
 banka.security.permissions-claim=permissions
-banka.security.permit-all=/v3/api-docs/**,/v3/api-docs.yaml,/swagger-ui/**,/swagger-ui.html,/actuator/**
-springdoc.api-docs.enabled=true
-springdoc.swagger-ui.enabled=true
+banka.security.permit-all=/v3/api-docs/**,/v3/api-docs.yaml,/swagger-ui/**,/swagger-ui.html,/actuator/health/liveness,/actuator/health/readiness,/actuator/info
+springdoc.api-docs.enabled=${SWAGGER_ENABLED:true}
+springdoc.swagger-ui.enabled=${SWAGGER_ENABLED:true}
 springdoc.swagger-ui.config-url=/api/cards/v3/api-docs/swagger-config
 springdoc.swagger-ui.url=/api/cards/v3/api-docs
 server.forward-headers-strategy=FRAMEWORK
@@ -23,7 +23,11 @@ management.tracing.sampling.probability=1.0
 management.otlp.tracing.endpoint=${MANAGEMENT_OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
 management.otlp.metrics.export.enabled=true
 management.otlp.metrics.export.url=${MANAGEMENT_OTLP_METRICS_EXPORT_URL:http://localhost:4318/v1/metrics}
-management.endpoint.health.show-details=always
+# PR_17 C17.2 (HOTFIX_02): show-details=always leak-uje DB konekciju, RabbitMQ host
+# i druge interne detalje na anonimnom /actuator/health/liveness pozivu.
+# 'when-authorized' otkriva detalje samo autentifikovanim korisnicima sa rolom ROLE_ADMIN.
+management.endpoint.health.show-details=when-authorized
+management.endpoint.health.roles=ADMIN
 management.endpoint.health.group.readiness.include=readinessState,db,rabbit
 
 jwt.secret=${JWT_SECRET}
@@ -52,5 +56,5 @@ spring.datasource.driver-class-name=org.postgresql.Driver
 spring.jpa.hibernate.ddl-auto=validate
 # Liquibase
 spring.liquibase.enabled=true
-spring.liquibase.change-log=classpath:db/changelog/db.changelog-master.xml
+spring.liquibase.change-log=classpath:db/changelog/db-changelog-card.xml
 company.observability.starter.user-id-mdc-enabled=true

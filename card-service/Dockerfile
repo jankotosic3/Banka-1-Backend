@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN gradle :card-service:bootJar --no-daemon
+RUN gradle :card-service:bootJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre-alpine
 
@@ -14,7 +14,7 @@ WORKDIR /app
 
 COPY --from=builder /app/card-service/build/libs/*.jar app.jar
 
-ARG SERVER_PORT=8087
+ARG SERVER_PORT=8091
 EXPOSE ${SERVER_PORT}
 
 ENTRYPOINT ["java","-jar","app.jar"]

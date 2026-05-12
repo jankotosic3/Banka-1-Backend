@@ -4,6 +4,9 @@ import com.banka1.card_service.dto.card_creation.request.AutoCardCreationRequest
 import com.banka1.card_service.service.CardRequestService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.annotation.Exchange;
+import org.springframework.amqp.rabbit.annotation.Queue;
+import org.springframework.amqp.rabbit.annotation.QueueBinding;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
@@ -26,7 +29,13 @@ public class CardCreationEventListener {
      * @param event incoming RabbitMQ payload
      * @param routingKey RabbitMQ routing key used for this delivery
      */
-    @RabbitListener(queues = "${card.rabbit.auto.queue}")
+    @RabbitListener(
+            bindings = @QueueBinding(
+                    value = @Queue(value = "${card.rabbit.auto.queue:card.creation.auto.queue}",
+                                    durable = "true"),
+                    exchange = @Exchange(value = "${card.rabbit.auto.exchange:card.events}",
+                                          type = "topic", durable = "true"),
+                    key = "card.create.#"))
     public void handleCardCreateEvent(
             CardCreationEventDto event,
             @Header(AmqpHeaders.RECEIVED_ROUTING_KEY) String routingKey

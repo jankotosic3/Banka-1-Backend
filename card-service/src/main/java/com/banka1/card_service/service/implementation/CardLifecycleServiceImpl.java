@@ -3,6 +3,7 @@ package com.banka1.card_service.service.implementation;
 import com.banka1.card_service.domain.Card;
 import com.banka1.card_service.domain.enums.CardStatus;
 import com.banka1.card_service.dto.card_management.internal.CardNotificationDto;
+import com.banka1.card_service.dto.card_management.response.CardAdminSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardDetailDTO;
 import com.banka1.card_service.dto.card_management.response.CardInternalSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardSummaryDTO;
@@ -19,6 +20,10 @@ import com.banka1.card_service.repository.CardRepository;
 import com.banka1.card_service.service.CardLifecycleService;
 import com.banka1.card_service.util.SensitiveDataMasker;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -175,6 +180,49 @@ public class CardLifecycleServiceImpl implements CardLifecycleService {
         Card card = findCardByIdOrThrow(cardId);
         card.setCardLimit(newLimit);
         cardRepository.save(card);
+    }
+
+    /**
+     * Returns a paginated, filtered admin view used by the "Portal za upravljanje
+     * karticama" employee screen (PR_32).
+     *
+     * <p>The {@code status} parameter accepts the {@link CardStatus} names
+     * case-insensitively; values that do not parse as a known status are
+     * treated as "no filter" so a typo in the UI never returns a 500. The
+     * {@code search} parameter is trimmed and treated as "no filter" when blank.
+     * Page indexes below zero are clamped to zero and sizes outside
+     * {@code [1, 100]} are clamped to that range so the controller does not need
+     * to duplicate the validation.
+     *
+     * <p>Results are sorted by card ID ascending — same stable-order pattern
+     * used by {@code AccountRepository.searchAccounts} (PR_31 hotfix) so paging
+     * windows are deterministic.
+     *
+     * @param page zero-based page index (clamped to {@code >= 0})
+     * @param size page size (clamped to {@code [1, 100]})
+     * @param status optional status filter name; unrecognized values are ignored
+     * @param search optional substring filter; blank values are ignored
+     * @return page of admin summaries (may be empty)
+     */
+    @Override
+    public Page<CardAdminSummaryDTO> getAllCardsPaginated(int page, int size, String status, String search) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(100, Math.max(1, size));
+
+        CardStatus statusFilter = null;
+        if (status != null && !status.isBlank()) {
+            try {
+                statusFilter = CardStatus.valueOf(status.trim().toUpperCase());
+            } catch (IllegalArgumentException ignored) {
+                // Unrecognized status — treat as "no filter".
+            }
+        }
+
+        String searchFilter = (search == null || search.isBlank()) ? null : search.trim();
+
+        Pageable pageable = PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "id"));
+        return cardRepository.searchCards(statusFilter, searchFilter, pageable)
+                .map(CardAdminSummaryDTO::new);
     }
 
     /**

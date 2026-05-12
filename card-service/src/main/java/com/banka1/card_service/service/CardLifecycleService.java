@@ -1,8 +1,10 @@
 package com.banka1.card_service.service;
 
+import com.banka1.card_service.dto.card_management.response.CardAdminSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardDetailDTO;
 import com.banka1.card_service.dto.card_management.response.CardInternalSummaryDTO;
 import com.banka1.card_service.dto.card_management.response.CardSummaryDTO;
+import org.springframework.data.domain.Page;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -91,4 +93,22 @@ public interface CardLifecycleService {
      * @param newLimit new limit value, must be zero or greater
      */
     void updateCardLimit(Long cardId, BigDecimal newLimit);
+
+    /**
+     * Returns a paginated, filtered view of every card in the bank used by the
+     * "Portal za upravljanje karticama" (PR_32) employee screen.
+     *
+     * <p>Both filters are optional. {@code status} accepts the names of
+     * {@link com.banka1.card_service.domain.enums.CardStatus} values
+     * (case-insensitive). {@code search} is matched as a case-insensitive substring
+     * against the raw card number, the linked account number and the brand label.
+     * Sorting is stable by card ID ascending so paging windows are deterministic.
+     *
+     * @param page zero-based page index
+     * @param size page size
+     * @param status optional status filter
+     * @param search optional substring filter
+     * @return page of admin summaries (may be empty)
+     */
+    Page<CardAdminSummaryDTO> getAllCardsPaginated(int page, int size, String status, String search);
 }

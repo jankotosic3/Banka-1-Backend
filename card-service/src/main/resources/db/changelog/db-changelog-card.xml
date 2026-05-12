@@ -5,6 +5,9 @@
         xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.17.xsd">
 
-    <include file="db/changelog/001-beginning.sql"/>
+    <include file="db/changelog/card/001-beginning.sql"/>
+
+    <!-- PR_33 follow-up: DEV-ONLY Mile Interbank Visa kartica na RSD racunu. -->
+    <include file="db/changelog/card/002-dev-mile-interbank-card.sql"/>
 
 </databaseChangeLog>
