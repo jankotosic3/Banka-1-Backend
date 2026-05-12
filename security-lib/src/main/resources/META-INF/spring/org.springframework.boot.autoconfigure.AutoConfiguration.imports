@@ -1,1 +1,2 @@
 com.banka1.security_lib.SecurityConfig
+com.banka1.security_lib.GlobalNoResourceHandler

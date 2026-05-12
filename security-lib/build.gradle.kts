@@ -44,14 +44,25 @@ dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
 	implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 	annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:3.4.3")
-//	implementation("org.springframework.boot:spring-boot-starter-webmvc")
+
+	// PR_19 C19.X fix: security-lib classes (Resilience4jConfig, ShedLockConfig,
+	// AuthorizationHeaderMaskingFilter, JmbgConverter) referenciraju ove API-je.
+	// Pre PR_19 Dockerfile-i nisu kompilirali security-lib (postojeci bin je bio
+	// na disku pre nego sto je multi-module build introduktovan); sada se kompilira
+	// pa eksplicitne dep-je moramo da deklariramo.
+	implementation("org.springframework.boot:spring-boot-starter-web")
+	implementation("io.github.resilience4j:resilience4j-spring-boot3:2.2.0")
+	implementation("net.javacrumbs.shedlock:shedlock-spring:6.0.2")
+	implementation("net.javacrumbs.shedlock:shedlock-provider-jdbc-template:6.0.2")
+	// PR_19 C19.X: jakarta.persistence (JmbgConverter @Converter + AttributeConverter).
+	implementation("jakarta.persistence:jakarta.persistence-api:3.1.0")
+	compileOnly("org.projectlombok:lombok:1.18.34")
+	annotationProcessor("org.projectlombok:lombok:1.18.34")
+
 	testImplementation("org.springframework.security:spring-security-test")
-//	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-web")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-
-
 }
 
 checkstyle {

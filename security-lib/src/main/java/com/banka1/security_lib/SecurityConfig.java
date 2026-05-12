@@ -9,6 +9,7 @@ import org.springframework.security.access.expression.method.DefaultMethodSecuri
 import org.springframework.security.access.expression.method.MethodSecurityExpressionHandler;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchy;
 import org.springframework.security.access.hierarchicalroles.RoleHierarchyImpl;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -31,8 +32,25 @@ import java.util.List;
 //@EnableWebSecurity
 @AutoConfiguration
 @EnableConfigurationProperties(SecurityProperties.class)
-
 public class SecurityConfig {
+
+    /**
+     * PR_19 C19.X: HS256 JwtDecoder bean. Spring Boot OAuth2 resource server
+     * auto-config kreira JwtDecoder samo ako je konfigurisan issuer-uri /
+     * jwk-set-uri / public-key-location. Posto banka koristi HS256 sa shared
+     * secret-om (jwt.secret), moramo eksplicitno deklarisati bean.
+     */
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
+    public org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder(
+            @org.springframework.beans.factory.annotation.Value("${jwt.secret}") String secret) {
+        javax.crypto.spec.SecretKeySpec key = new javax.crypto.spec.SecretKeySpec(
+                secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256");
+        return org.springframework.security.oauth2.jwt.NimbusJwtDecoder
+                .withSecretKey(key)
+                .macAlgorithm(org.springframework.security.oauth2.jose.jws.MacAlgorithm.HS256)
+                .build();
+    }
 
     /**
      * Registruje password encoder koji se koristi za cuvanje i proveru lozinki.
@@ -84,6 +102,7 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/employees/**").hasAnyRole("BASIC","ADMIN","SUPERVISOR","AGENT","SERVICE")
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth ->
@@ -114,13 +133,23 @@ public class SecurityConfig {
 
         return converter;
     }
+    /**
+     * CORS bean koji čita SecurityProperties.cors blok. Default-i (localhost:4200, eksplicitne
+     * HTTP metode i header-i) važe samo za lokalni dev. Production deploy MORA da postavi
+     * BANKA_SECURITY_CORS_ALLOWED_ORIGINS env var na pravi frontend domen, inače će CORS
+     * preflight iz produkcije fail-ovati. Wildcard "*" se nigde ne koristi za methods/headers
+     * jer kombinacija sa allowCredentials=true otvara CSRF-like vektor.
+     */
     @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
+    public CorsConfigurationSource corsConfigurationSource(SecurityProperties props) {
+        SecurityProperties.Cors corsProps = props.getCors();
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:4200"));
-        config.setAllowedMethods(List.of("*"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
+        config.setAllowedOrigins(corsProps.getAllowedOrigins());
+        config.setAllowedMethods(corsProps.getAllowedMethods());
+        config.setAllowedHeaders(corsProps.getAllowedHeaders());
+        config.setExposedHeaders(corsProps.getExposedHeaders());
+        config.setAllowCredentials(corsProps.isAllowCredentials());
+        config.setMaxAge(corsProps.getMaxAgeSeconds());
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
