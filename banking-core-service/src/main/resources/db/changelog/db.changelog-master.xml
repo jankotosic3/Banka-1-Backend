@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <!--
+        PR_19 C19.X: konsolidovani banking-core-service izvrsava merge legacy migracija
+        (account, card, transaction, transfer, verification) + banking-core specific
+        migracija (margin, GDPR event log, transfer retry, fund reservations).
+
+        Redosled je vazan: legacy schema mora postojati pre banking-core specific
+        migracija koje modifikuju iste tabele (npr. margin_accounts, soft-delete
+        cascade na accounts/cards).
+    -->
+
+    <!-- Legacy schema (jedan changelog po starom modulu, sa subdir-ovanim SQL fajlovima). -->
+    <include file="db/changelog/db-changelog-account.xml"/>
+    <include file="db/changelog/db-changelog-card.xml"/>
+    <include file="db/changelog/db-changelog-transaction.xml"/>
+    <include file="db/changelog/db-changelog-transfer.xml"/>
+    <include file="db/changelog/db-changelog-verification.xml"/>
+
+    <!-- Banking-core specific dodatci (PR_03+, PR_07/PR_11+, PR_13, PR_14, PR_15). -->
+    <include file="db/changelog/banking-core-account/010-create-margin-accounts.sql"/>
+    <include file="db/changelog/banking-core-shared/010-gdpr-event-log.sql"/>
+    <include file="db/changelog/banking-core-transfer/005-transfer-retry-log.sql"/>
+    <include file="db/changelog/banking-core-transfer/006-fund-reservations.sql"/>
+    <include file="db/changelog/banking-core-transfer/007-internal-transfer-log.sql"/>
+    <include file="db/changelog/banking-core-transfer/008-external-transfers.sql"/>
+    <include file="db/changelog/banking-core-transfer/009-interbank-reservations.sql"/>
+
+</databaseChangeLog>
