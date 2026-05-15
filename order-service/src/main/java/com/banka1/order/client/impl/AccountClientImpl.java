@@ -93,6 +93,20 @@ public class AccountClientImpl implements AccountClient {
     }
 
     @Override
+    public String getDefaultRsdAccountNumberForOwner(Long ownerId) {
+        try {
+            var response = accountRestClient.get()
+                    .uri("/accounts/internal/default/{ownerId}", ownerId)
+                    .retrieve()
+                    .body(java.util.Map.class);
+            return response != null ? (String) response.get("accountNumber") : null;
+        } catch (Exception ex) {
+            log.warn("Could not resolve default RSD account for owner {}: {}", ownerId, ex.getMessage());
+            return null;
+        }
+    }
+
+    @Override
     public UpdatedBalanceResponseDto exchangeBuy(OneSidedTransactionDto request) {
         return accountRestClient.post()
                 .uri("/internal/accounts/exchange/buy")

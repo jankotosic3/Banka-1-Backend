@@ -19,12 +19,17 @@ import com.banka1.account_service.service.AccountService;
 import com.banka1.account_service.service.TransactionalService;
 import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.NoSuchElementException;
+import java.util.UUID;
 
 /**
  * Implementacija servisa za izvrsavanje internih transakcija i transfera.
@@ -35,6 +40,7 @@ import java.util.NoSuchElementException;
  */
 @RequiredArgsConstructor
 @Service
+@Slf4j
 public class AccountServiceImplementation implements AccountService {
     /** Servis za atomične debitne/kreditne operacije. */
     private final TransactionalService transactionalService;
@@ -42,6 +48,8 @@ public class AccountServiceImplementation implements AccountService {
     private final AccountRepository accountRepository;
 
     private final CurrencyRepository currencyRepository;
+
+    private final JdbcTemplate jdbcTemplate;
 
     /**
      * Validira da račun postoji, ima ACTIVE status i nije istekao.
@@ -214,7 +222,9 @@ public class AccountServiceImplementation implements AccountService {
             throw new IllegalArgumentException("Unesi id clienta");
         if(from.getVlasnik().equals(to.getVlasnik()))
             throw new IllegalArgumentException("Tranzakcija se ne moze odvijati za racune istog vlasnike");
-        return execute(paymentDto, from, to, bankSender, bankTarget);
+        UpdatedBalanceResponseDto result = execute(paymentDto, from, to, bankSender, bankTarget);
+        recordPayment(from, to, paymentDto.getFromAmount(), paymentDto.getToAmount(), paymentDto.getCommission(), "Payment");
+        return result;
     }
 
     @Override
@@ -254,7 +264,9 @@ public class AccountServiceImplementation implements AccountService {
             throw new IllegalArgumentException("Unesi id clienta");
         if(!from.getVlasnik().equals(to.getVlasnik()))
             throw new IllegalArgumentException("Transfer se moze odvijati samo za racune istog vlasnika");
-        return execute(paymentDto, from, to, bankSender, bankTarget);
+        UpdatedBalanceResponseDto result = execute(paymentDto, from, to, bankSender, bankTarget);
+        recordPayment(from, to, paymentDto.getFromAmount(), paymentDto.getToAmount(), paymentDto.getCommission(), "Transfer");
+        return result;
     }
 
     @Override
@@ -282,23 +294,67 @@ public class AccountServiceImplementation implements AccountService {
     }
 
     @Override
+    @Transactional
     public UpdatedBalanceResponseDto exchangeBuy(OneSidedTransactionDto request) {
         Account account = resolveAccountForOneSided(request);
         if (request.getAmount() == null || request.getAmount().signum() <= 0) {
             throw new IllegalArgumentException("Iznos mora biti pozitivan");
         }
         transactionalService.withdrawOneSided(account, request.getAmount());
+        recordPayment(account, validateBank(account), request.getAmount(), request.getAmount(), BigDecimal.ZERO, "Stock purchase");
         return new UpdatedBalanceResponseDto(account.getRaspolozivoStanje(), null);
     }
 
     @Override
+    @Transactional
     public UpdatedBalanceResponseDto exchangeSell(OneSidedTransactionDto request) {
         Account account = resolveAccountForOneSided(request);
         if (request.getAmount() == null || request.getAmount().signum() <= 0) {
             throw new IllegalArgumentException("Iznos mora biti pozitivan");
         }
         transactionalService.depositOneSided(account, request.getAmount());
+        recordPayment(validateBank(account), account, request.getAmount(), request.getAmount(), BigDecimal.ZERO, "Stock sale");
         return new UpdatedBalanceResponseDto(account.getRaspolozivoStanje(), null);
+    }
+
+    // Writes a payment_table record so the movement appears in the user-facing transaction list.
+    // Fail-safe: a write failure is logged but never propagated — the balance update has already
+    // committed in its own transaction and must not be rolled back or misclassified as a debit failure.
+    private void recordPayment(Account from, Account to, BigDecimal fromAmount, BigDecimal toAmount,
+                               BigDecimal commission, String purpose) {
+        try {
+            String fromCurrency = currencyCode(from);
+            String toCurrency = currencyCode(to);
+            String firstName = to.getImeVlasnikaRacuna() != null ? to.getImeVlasnikaRacuna() : "";
+            String lastName = to.getPrezimeVlasnikaRacuna() != null ? to.getPrezimeVlasnikaRacuna() : "";
+            String recipientName = (firstName + " " + lastName).trim();
+            if (recipientName.isEmpty()) {
+                recipientName = to.getBrojRacuna();
+            }
+            String orderNumber = UUID.randomUUID().toString();
+            jdbcTemplate.update(
+                    "INSERT INTO payment_table "
+                            + "(from_account_number, to_account_number, initial_amount, final_amount, commission, "
+                            + " sender_client_id, recipient_client_id, recipient_name, "
+                            + " payment_code, reference_number, payment_purpose, status, "
+                            + " from_currency, to_currency, order_number, created_at, updated_at, version) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '289', ?, ?, 'COMPLETED', ?, ?, ?, NOW(), NOW(), 0)",
+                    from.getBrojRacuna(), to.getBrojRacuna(), fromAmount, toAmount,
+                    commission != null ? commission : BigDecimal.ZERO,
+                    from.getVlasnik(), to.getVlasnik(), recipientName,
+                    orderNumber, purpose,
+                    fromCurrency, toCurrency,
+                    orderNumber);
+        } catch (Exception ex) {
+            log.error("Failed to write payment_table record for movement from {} to {} amount={}: {}",
+                    from.getBrojRacuna(), to.getBrojRacuna(), fromAmount, ex.getMessage(), ex);
+        }
+    }
+
+    private String currencyCode(Account account) {
+        return account.getCurrency() != null && account.getCurrency().getOznaka() != null
+                ? account.getCurrency().getOznaka().name()
+                : "RSD";
     }
 
     /**

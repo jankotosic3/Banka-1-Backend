@@ -62,6 +62,21 @@ public class TaxController {
     }
 
     /**
+     * Triggers capital gains tax collection for all users from the first day of the current
+     * calendar month up to the moment it is called.
+     *
+     * Useful for mid-month collection. Already-charged entries are skipped (idempotent).
+     *
+     * @return 200 OK if collection completed successfully
+     */
+    @PostMapping("/tax/collect/current-month")
+    @PreAuthorize("hasRole('SUPERVISOR')")
+    public ResponseEntity<Void> collectCurrentMonthTax() {
+        taxService.collectCurrentMonthTax();
+        return ResponseEntity.ok().build();
+    }
+
+    /**
      * Internal endpoint for triggering capital gains tax calculation by system services.
      *
      * Used by other backend services or for internal orchestration when tax collection

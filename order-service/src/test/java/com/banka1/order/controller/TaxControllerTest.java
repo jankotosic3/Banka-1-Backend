@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,17 +44,29 @@ class TaxControllerTest {
     void runTaxEndpoints_delegateToTaxService() {
         ResponseEntity<Void> collectResponse = controller.collectTax();
         ResponseEntity<Void> internalResponse = controller.runTaxCalculationInternal();
+        ResponseEntity<Void> currentMonthResponse = controller.collectCurrentMonthTax();
 
         assertThat(collectResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(internalResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(currentMonthResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(taxService).collectMonthlyTaxManually();
         verify(taxService).collectMonthlyTax();
+        verify(taxService).collectCurrentMonthTax();
     }
 
     @Test
     void getTaxTracking_delegatesToService() {
         when(taxService.getTaxTracking(eq("CLIENT"), eq("Pera"), eq("Peric"), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(new TaxTrackingRowResponse("Pera", "Peric", "CLIENT", new BigDecimal("12.50")))));
+                .thenReturn(new PageImpl<>(List.of(new TaxTrackingRowResponse(
+                        "Pera",
+                        "Peric",
+                        "CLIENT",
+                        new BigDecimal("12.50"),
+                        LocalDateTime.now(),
+                        BigDecimal.ZERO,
+                        BigDecimal.ZERO,
+                        "PENDING"
+                ))));
 
         ResponseEntity<Page<TaxTrackingRowResponse>> response = controller.getTaxTracking("CLIENT", "Pera", "Peric", 0, 10);
 
@@ -79,5 +92,9 @@ class TaxControllerTest {
         Method getTaxTracking = TaxController.class.getDeclaredMethod("getTaxTracking", String.class, String.class, String.class, int.class, int.class);
         assertThat(getTaxTracking.getAnnotation(GetMapping.class).value()).containsExactly("/tax/tracking");
         assertThat(getTaxTracking.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('SUPERVISOR')");
+
+        Method collectCurrentMonth = TaxController.class.getDeclaredMethod("collectCurrentMonthTax");
+        assertThat(collectCurrentMonth.getAnnotation(PostMapping.class).value()).containsExactly("/tax/collect/current-month");
+        assertThat(collectCurrentMonth.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasRole('SUPERVISOR')");
     }
 }

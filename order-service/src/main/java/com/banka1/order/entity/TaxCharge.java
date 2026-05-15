@@ -53,19 +53,9 @@ public class TaxCharge {
     @Column(name = "sell_transaction_id", nullable = false)
     private Long sellTransactionId;
 
-    /** Lazy-loaded reference to the sell transaction entity. */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "sell_transaction_id", insertable = false, updatable = false)
-    private Transaction sellTransaction;
-
-    /** Reference to the matched BUY transaction (FIFO matching). */
+    /** Reference to the matched BUY transaction (FIFO matching). -1 means portfolio-average fallback. */
     @Column(name = "buy_transaction_id", nullable = false)
     private Long buyTransactionId;
-
-    /** Lazy-loaded reference to the buy transaction entity. */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "buy_transaction_id", insertable = false, updatable = false)
-    private Transaction buyTransaction;
 
     /** ID of the user (taxpayer) who made the sale. */
     @Column(nullable = false)
@@ -106,6 +96,10 @@ public class TaxCharge {
 
     /** Timestamp when tax was charged to user's account. Null until charged. */
     private LocalDateTime chargedAt;
+
+    /** OTC contract ID, set instead of sell/buy transaction IDs for exercised OTC contracts. */
+    @Column(name = "otc_contract_id")
+    private Long otcContractId;
 
     /**
      * JPA callback that sets the creation timestamp automatically.

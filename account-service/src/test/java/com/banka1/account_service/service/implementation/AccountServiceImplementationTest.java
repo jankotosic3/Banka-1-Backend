@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -37,6 +38,7 @@ class AccountServiceImplementationTest {
     @Mock private TransactionalService transactionalService;
     @Mock private AccountRepository accountRepository;
     @Mock private CurrencyRepository currencyRepository;
+    @Mock private JdbcTemplate jdbcTemplate;
 
     @InjectMocks
     private AccountServiceImplementation service;

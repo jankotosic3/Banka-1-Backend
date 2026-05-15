@@ -13,4 +13,6 @@
     <include file="db/changelog/order/006-order-reservations.sql"/>
     <include file="db/changelog/order/007-portfolio-reservations.sql"/>
     <include file="db/changelog/order/008-interbank-stock-reservations.sql"/>
+    <include file="db/changelog/order/009-otc-tax-charge-contract-id.sql"/>
+    <include file="db/changelog/order/010-tax-charge-drop-fk.sql"/>
 </databaseChangeLog>

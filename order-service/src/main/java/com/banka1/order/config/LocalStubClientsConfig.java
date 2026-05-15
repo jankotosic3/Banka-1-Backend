@@ -67,6 +67,11 @@ class LocalStubClientsConfig {
             }
 
             @Override
+            public String getDefaultRsdAccountNumberForOwner(Long ownerId) {
+                return "LOCAL-ACCOUNT";
+            }
+
+            @Override
             public UpdatedBalanceResponseDto exchangeBuy(OneSidedTransactionDto request) {
                 return null;
             }

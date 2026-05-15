@@ -75,6 +75,15 @@ public interface AccountClient {
     UpdatedBalanceResponseDto transaction(PaymentDto payment);
 
     /**
+     * Returns the RSD checking account number for the given owner.
+     * Used to find the seller's account when collecting OTC capital-gains tax.
+     *
+     * @param ownerId client/employee ID
+     * @return account number string, or null if none found
+     */
+    String getDefaultRsdAccountNumberForOwner(Long ownerId);
+
+    /**
      * One-sided debit on a single account for the BUY trade leg (GHI #199).
      * Bank account is NOT touched - the trade amount only leaves the user's
      * account, satisfying the PM directive "NE DAJE BANCI PARE, samo se skidaju

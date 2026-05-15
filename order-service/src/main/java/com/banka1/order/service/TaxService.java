@@ -59,6 +59,17 @@ public interface TaxService {
     void collectMonthlyTaxManually();
 
     /**
+     * Calculates and collects capital gains tax for all eligible trades
+     * from the first day of the current calendar month up to the moment it is called.
+     *
+     * <p>
+     * Intended for supervisor usage via API when mid-month collection is needed.
+     * Idempotent: already-charged entries are skipped via duplicate-check on transaction IDs.
+     * </p>
+     */
+    void collectCurrentMonthTax();
+
+    /**
      * Retrieves aggregated tax debt per user in RSD.
      *
      * <p>

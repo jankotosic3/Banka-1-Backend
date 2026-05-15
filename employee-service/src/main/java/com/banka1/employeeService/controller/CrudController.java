@@ -108,7 +108,7 @@ public class CrudController {
      * @return zaposleni
      */
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('BASIC','ADMIN','SUPERVISOR','AGENT')")
+    @PreAuthorize("hasAnyRole('BASIC','ADMIN','SUPERVISOR','AGENT','SERVICE')")
     public ResponseEntity<EmployeeResponseDto> getEmployee(@PathVariable Long id) {
         return ResponseEntity.ok(crudService.getEmployee(id));
     }

@@ -237,7 +237,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         if (Boolean.TRUE.equals(order.getMargin())) {
             checkMarginRequirements(user, fundingAccountId, listing, order.getQuantity());
         } else if (order.getDirection() == OrderDirection.BUY) {
-            checkFunds(fundingAccountId, approximatePrice.add(fee));
+            checkFunds(fundingAccountId, approximatePrice.add(fee), listing.getCurrency());
         }
         ApprovalReservationDecision decision = user.isClient()
                 ? new ApprovalReservationDecision(OrderStatus.APPROVED, BigDecimal.ZERO)
@@ -320,7 +320,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         transferFee(order.getUserId(), fundingAccountId, fee, listing.getCurrency());
 
         if (order.getDirection() == OrderDirection.BUY && !Boolean.TRUE.equals(order.getMargin())) {
-            checkFunds(fundingAccountId, approximatePrice);
+            checkFunds(fundingAccountId, approximatePrice, listing.getCurrency());
         }
 
         // See note in confirmOrder — keep ask/volume current so the async executor can fill.
@@ -594,10 +594,11 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         }
     }
 
-    private void checkFunds(Long accountId, BigDecimal totalAmount) {
+    private void checkFunds(Long accountId, BigDecimal totalAmount, String amountCurrency) {
         AccountDetailsDto account = accountClient.getAccountDetails(accountId);
         BigDecimal balance = account.getBalance() == null ? BigDecimal.ZERO : account.getBalance();
-        if (balance.compareTo(totalAmount) < 0) {
+        BigDecimal amountInAccountCurrency = convertAmountWithoutCommission(amountCurrency, account.getCurrency(), totalAmount);
+        if (balance.compareTo(amountInAccountCurrency) < 0) {
             throw new BusinessConflictException("Insufficient funds");
         }
     }
@@ -903,15 +904,18 @@ public class OrderCreationServiceImpl implements OrderCreationService {
             return;
         }
 
+        // Convert targetAmount (in targetCurrency, e.g. 7 USD) to fromAccount's currency
+        // (e.g. RSD) so we know how much to debit from the sender.
         ExchangeRateDto conversion = applyConversionFee
-                ? exchangeClient.calculate(fromAccount.getCurrency(), targetCurrency, targetAmount)
-                : exchangeClient.calculateWithoutCommission(fromAccount.getCurrency(), targetCurrency, targetAmount);
+                ? exchangeClient.calculate(targetCurrency, fromAccount.getCurrency(), targetAmount)
+                : exchangeClient.calculateWithoutCommission(targetCurrency, fromAccount.getCurrency(), targetAmount);
 
+        BigDecimal fromAmount = conversion.getConvertedAmount() == null ? targetAmount : conversion.getConvertedAmount();
         PaymentDto payment = new PaymentDto(
                 fromAccount.getAccountNumber(),
                 toAccount.getAccountNumber(),
-                targetAmount,
-                conversion.getConvertedAmount() == null ? targetAmount : conversion.getConvertedAmount(),
+                fromAmount,     // debit in sender's currency (e.g. RSD equivalent of 7 USD)
+                targetAmount,   // credit in receiver's currency (e.g. 7 USD)
                 applyConversionFee && conversion.getCommission() != null ? conversion.getCommission() : BigDecimal.ZERO,
                 fromAccount.getOwnerId()
         );

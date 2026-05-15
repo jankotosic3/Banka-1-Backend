@@ -9,13 +9,13 @@ import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.CustomerDto;
 import com.banka1.order.dto.CustomerPageResponse;
 import com.banka1.order.dto.EmployeeDto;
-import com.banka1.order.dto.EmployeePageResponse;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
 import com.banka1.order.dto.TaxDebtResponse;
 import com.banka1.order.dto.TaxTrackingRowResponse;
 import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.dto.response.UpdatedBalanceResponseDto;
+import com.banka1.order.entity.ActuaryInfo;
 import com.banka1.order.entity.Order;
 import com.banka1.order.entity.TaxCharge;
 import com.banka1.order.entity.Transaction;
@@ -23,6 +23,7 @@ import com.banka1.order.entity.enums.ListingType;
 import com.banka1.order.entity.enums.OrderDirection;
 import com.banka1.order.entity.enums.TaxChargeStatus;
 import com.banka1.order.rabbitmq.OrderNotificationProducer;
+import com.banka1.order.repository.ActuaryInfoRepository;
 import com.banka1.order.repository.OrderRepository;
 import com.banka1.order.repository.TaxChargeRepository;
 import com.banka1.order.repository.TransactionRepository;
@@ -36,8 +37,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -54,6 +60,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -81,6 +88,10 @@ class TaxServiceTest {
     private OrderNotificationProducer notificationProducer;
     @Mock
     private TaxChargeRepository taxChargeRepository;
+    @Mock
+    private ActuaryInfoRepository actuaryInfoRepository;
+    @Mock
+    private JdbcTemplate jdbcTemplate;
 
     @InjectMocks
     private TaxServiceImpl taxService;
@@ -93,6 +104,8 @@ class TaxServiceTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(taxService, "taxRate", new BigDecimal("0.15"));
+
         buyTx = new Transaction();
         buyTx.setId(1L);
         buyTx.setOrderId(10L);
@@ -173,6 +186,10 @@ class TaxServiceTest {
             persistedCharges.remove(taxCharge.getSellTransactionId() + ":" + taxCharge.getBuyTransactionId());
             return null;
         }).when(taxChargeRepository).delete(any(TaxCharge.class));
+        lenient().when(taxChargeRepository.findAll()).thenReturn(List.of());
+        lenient().when(actuaryInfoRepository.findAll()).thenReturn(List.of());
+        lenient().when(jdbcTemplate.query(any(String.class), any(RowMapper.class), any()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -618,12 +635,12 @@ class TaxServiceTest {
         actuary.setIme("Mika");
         actuary.setPrezime("Mikic");
         actuary.setRole("AGENT");
-        EmployeePageResponse employeePage = new EmployeePageResponse();
-        employeePage.setContent(List.of(actuary));
-        employeePage.setTotalPages(1);
+        ActuaryInfo actuaryInfo = new ActuaryInfo();
+        actuaryInfo.setEmployeeId(6L);
 
         when(clientClient.searchCustomers(null, null, 0, 100)).thenReturn(customerPage);
-        when(employeeClient.searchEmployees(null, null, null, null, 0, 100)).thenReturn(employeePage);
+        when(actuaryInfoRepository.findAll()).thenReturn(List.of(actuaryInfo));
+        when(employeeClient.getEmployee(6L)).thenReturn(actuary);
 
         var result = taxService.getTaxTracking(null, null, null, Pageable.unpaged());
 
@@ -641,7 +658,7 @@ class TaxServiceTest {
                 .satisfies(row -> assertThat(row.getTaxDebtRsd()).isEqualByComparingTo(BigDecimal.ZERO));
         verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("37.50"));
         verify(clientClient).searchCustomers(null, null, 0, 100);
-        verify(employeeClient).searchEmployees(null, null, null, null, 0, 100);
+        verify(employeeClient).getEmployee(6L);
         verify(transactionRepository, never()).findByTimestampBetween(any(), any());
     }
 
@@ -655,18 +672,87 @@ class TaxServiceTest {
         actuary.setIme("Ana");
         actuary.setPrezime("Agentic");
         actuary.setRole("AGENT");
-        EmployeePageResponse employeePage = new EmployeePageResponse();
-        employeePage.setContent(List.of(actuary));
-        employeePage.setTotalPages(1);
+        ActuaryInfo actuaryInfo = new ActuaryInfo();
+        actuaryInfo.setEmployeeId(6L);
 
-        when(employeeClient.searchEmployees(null, "Ana", "Agentic", null, 0, 100)).thenReturn(employeePage);
+        when(actuaryInfoRepository.findAll()).thenReturn(List.of(actuaryInfo));
+        when(employeeClient.getEmployee(6L)).thenReturn(actuary);
 
         var result = taxService.getTaxTracking("ACTUARY", "Ana", "Agentic", Pageable.unpaged());
 
         assertThat(result.getContent()).hasSize(1);
         assertThat(result.getContent().getFirst().getUserType()).isEqualTo("ACTUARY");
-        verify(employeeClient).searchEmployees(null, "Ana", "Agentic", null, 0, 100);
+        verify(employeeClient).getEmployee(6L);
         verify(clientClient, never()).searchCustomers(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    void getTaxTracking_includesExercisedOtcContractsAfterOwnershipTransfer() throws Exception {
+        when(orderRepository.findByDirection(OrderDirection.SELL)).thenReturn(List.of());
+
+        CustomerDto customer = new CustomerDto();
+        customer.setId(1L);
+        customer.setFirstName("Marko");
+        customer.setLastName("Markovic");
+        CustomerPageResponse customerPage = new CustomerPageResponse();
+        customerPage.setContent(List.of(customer));
+        customerPage.setTotalPages(1);
+        when(clientClient.searchCustomers("Marko", null, 0, 100)).thenReturn(customerPage);
+
+        lenient().when(jdbcTemplate.query(any(String.class), any(RowMapper.class), any()))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    RowMapper<Object> mapper = invocation.getArgument(1, RowMapper.class);
+                    ResultSet rs = mock(ResultSet.class);
+                    when(rs.getLong("contract_id")).thenReturn(2L);
+                    when(rs.getLong("seller_id")).thenReturn(1L);
+                    when(rs.getLong("listing_id")).thenReturn(4L);
+                    when(rs.getString("stock_ticker")).thenReturn("AMZN");
+                    when(rs.getInt("amount")).thenReturn(3);
+                    when(rs.getBigDecimal("price_per_stock")).thenReturn(new BigDecimal("260.00"));
+                    when(rs.getBigDecimal("average_purchase_price")).thenReturn(new BigDecimal("192.00"));
+                    when(rs.getTimestamp("exercised_at")).thenReturn(Timestamp.valueOf(LocalDateTime.now().minusDays(1)));
+                    return List.of(mapper.mapRow(rs, 0));
+                });
+        ExchangeRateDto conversion = new ExchangeRateDto();
+        conversion.setConvertedAmount(new BigDecimal("3049.85"));
+        when(exchangeClient.calculateWithoutCommission("USD", "RSD", new BigDecimal("30.60"))).thenReturn(conversion);
+
+        var result = taxService.getTaxTracking("CLIENT", "Marko", null, Pageable.unpaged());
+
+        assertThat(result.getContent()).hasSize(1);
+        assertThat(result.getContent().getFirst().getTaxDebtRsd()).isEqualByComparingTo("3049.85");
+        assertThat(result.getContent().getFirst().getCurrentMonthTaxRsd()).isEqualByComparingTo("3049.85");
+        assertThat(result.getContent().getFirst().getStatus()).isEqualTo("PENDING");
+        verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("30.60"));
+    }
+
+    @Test
+    void getCurrentMonthUnpaidTax_includesExercisedOtcContracts() throws Exception {
+        when(orderRepository.findByUserIdAndDirection(1L, OrderDirection.SELL)).thenReturn(List.of());
+        lenient().when(jdbcTemplate.query(any(String.class), any(RowMapper.class), any()))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    RowMapper<Object> mapper = invocation.getArgument(1, RowMapper.class);
+                    ResultSet rs = mock(ResultSet.class);
+                    when(rs.getLong("contract_id")).thenReturn(2L);
+                    when(rs.getLong("seller_id")).thenReturn(1L);
+                    when(rs.getLong("listing_id")).thenReturn(4L);
+                    when(rs.getString("stock_ticker")).thenReturn("AMZN");
+                    when(rs.getInt("amount")).thenReturn(3);
+                    when(rs.getBigDecimal("price_per_stock")).thenReturn(new BigDecimal("260.00"));
+                    when(rs.getBigDecimal("average_purchase_price")).thenReturn(new BigDecimal("192.00"));
+                    when(rs.getTimestamp("exercised_at")).thenReturn(Timestamp.valueOf(LocalDateTime.now().minusDays(1)));
+                    return List.of(mapper.mapRow(rs, 0));
+                });
+        ExchangeRateDto conversion = new ExchangeRateDto();
+        conversion.setConvertedAmount(new BigDecimal("3049.85"));
+        when(exchangeClient.calculateWithoutCommission("USD", "RSD", new BigDecimal("30.60"))).thenReturn(conversion);
+
+        BigDecimal unpaidTax = taxService.getCurrentMonthUnpaidTax(1L);
+
+        assertThat(unpaidTax).isEqualByComparingTo("3049.85");
+        verify(exchangeClient).calculateWithoutCommission("USD", "RSD", new BigDecimal("30.60"));
     }
 
     @Test
@@ -700,25 +786,24 @@ class TaxServiceTest {
         actuaryPage1.setPrezime("Page1");
         actuaryPage1.setRole("AGENT");
 
-        EmployeePageResponse employees0 = new EmployeePageResponse();
-        employees0.setContent(List.of(actuaryPage0));
-        employees0.setTotalPages(2);
-        EmployeePageResponse employees1 = new EmployeePageResponse();
-        employees1.setContent(List.of(actuaryPage1));
-        employees1.setTotalPages(2);
+        ActuaryInfo actuaryInfo0 = new ActuaryInfo();
+        actuaryInfo0.setEmployeeId(3L);
+        ActuaryInfo actuaryInfo1 = new ActuaryInfo();
+        actuaryInfo1.setEmployeeId(4L);
 
         when(clientClient.searchCustomers(null, null, 0, 100)).thenReturn(customers0);
         when(clientClient.searchCustomers(null, null, 1, 100)).thenReturn(customers1);
-        when(employeeClient.searchEmployees(null, null, null, null, 0, 100)).thenReturn(employees0);
-        when(employeeClient.searchEmployees(null, null, null, null, 1, 100)).thenReturn(employees1);
+        when(actuaryInfoRepository.findAll()).thenReturn(List.of(actuaryInfo0, actuaryInfo1));
+        when(employeeClient.getEmployee(3L)).thenReturn(actuaryPage0);
+        when(employeeClient.getEmployee(4L)).thenReturn(actuaryPage1);
 
         var result = taxService.getTaxTracking(null, null, null, Pageable.unpaged());
 
         assertThat(result.getContent()).hasSize(4);
         verify(clientClient).searchCustomers(null, null, 0, 100);
         verify(clientClient).searchCustomers(null, null, 1, 100);
-        verify(employeeClient).searchEmployees(null, null, null, null, 0, 100);
-        verify(employeeClient).searchEmployees(null, null, null, null, 1, 100);
+        verify(employeeClient).getEmployee(3L);
+        verify(employeeClient).getEmployee(4L);
         verify(clientClient, never()).searchCustomers(any(), any(), anyInt(), eq(200));
         verify(employeeClient, never()).searchEmployees(any(), any(), any(), any(), anyInt(), eq(200));
     }
