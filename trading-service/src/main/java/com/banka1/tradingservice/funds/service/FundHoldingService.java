@@ -1,9 +1,12 @@
 package com.banka1.tradingservice.funds.service;
 
+import com.banka1.tradingservice.funds.client.MarketPriceClient;
 import com.banka1.tradingservice.funds.domain.FundHolding;
+import com.banka1.tradingservice.funds.dto.FundHoldingDto;
 import com.banka1.tradingservice.funds.repository.FundHoldingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +14,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -33,7 +37,11 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class FundHoldingService {
 
+    private static final String HOLDING_PRICE_CURRENCY = "USD";
+    private static final String FUND_BASE_CURRENCY = "RSD";
+
     private final FundHoldingRepository repository;
+    private final ObjectProvider<MarketPriceClient> marketPriceClientProvider;
 
     /**
      * Dodaje/azurira holding za par (fund, ticker). avgUnitPrice se rekalkulise:
@@ -108,5 +116,73 @@ public class FundHoldingService {
     @Transactional(readOnly = true)
     public List<FundHolding> listByFund(Long fundId) {
         return repository.findByFundIdAndDeletedFalse(fundId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<FundHoldingDto> enrichedHoldings(Long fundId) {
+        List<FundHolding> holdings = listByFund(fundId);
+        if (holdings.isEmpty()) {
+            return List.of();
+        }
+        List<String> tickers = holdings.stream().map(FundHolding::getStockTicker).distinct().toList();
+        Map<String, MarketPriceClient.StockPrice> snapshots = Map.of();
+        MarketPriceClient client = marketPriceClientProvider.getIfAvailable();
+        if (client != null) {
+            snapshots = client.fetchSnapshots(tickers);
+        }
+        Map<String, MarketPriceClient.StockPrice> snapshotsFinal = snapshots;
+        return holdings.stream().map(h -> {
+            MarketPriceClient.StockPrice snap = snapshotsFinal.get(h.getStockTicker());
+            return FundHoldingDto.builder()
+                    .id(h.getId())
+                    .ticker(h.getStockTicker())
+                    .quantity(h.getQuantity())
+                    .avgUnitPrice(h.getAvgUnitPrice())
+                    .initialMarginCost(h.getAvgUnitPrice().multiply(BigDecimal.valueOf(h.getQuantity())))
+                    .price(snap != null ? snap.currentPrice() : null)
+                    .change(snap != null ? snap.changePercent() : null)
+                    .volume(snap != null && snap.volume() != null ? snap.volume() : 0L)
+                    .acquisitionDate(h.getCreatedAt())
+                    .build();
+        }).toList();
+    }
+
+    /**
+     * Ukupna tržišna vrednost svih hartija fonda u RSD. Koristi live cene iz
+     * market-service-a ako je dostupan, inače pada na avgUnitPrice kao
+     * konzervativnu procenu.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal calculateHoldingsValue(Long fundId) {
+        List<FundHolding> holdings = listByFund(fundId);
+        if (holdings.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        List<String> tickers = holdings.stream().map(FundHolding::getStockTicker).distinct().toList();
+        Map<String, BigDecimal> prices = Map.of();
+        MarketPriceClient client = marketPriceClientProvider.getIfAvailable();
+        if (client != null) {
+            prices = client.currentPrices(tickers);
+        }
+        BigDecimal totalUsd = BigDecimal.ZERO;
+        for (FundHolding h : holdings) {
+            BigDecimal price = prices.getOrDefault(h.getStockTicker(), h.getAvgUnitPrice());
+            if (price != null && price.signum() > 0) {
+                totalUsd = totalUsd.add(price.multiply(BigDecimal.valueOf(h.getQuantity())));
+            }
+        }
+        return convertUsdToRsd(totalUsd).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal convertUsdToRsd(BigDecimal amountUsd) {
+        if (amountUsd == null || amountUsd.signum() == 0) {
+            return BigDecimal.ZERO;
+        }
+        MarketPriceClient client = marketPriceClientProvider.getIfAvailable();
+        if (client == null) {
+            return amountUsd;
+        }
+        return client.convertNoCommission(amountUsd, HOLDING_PRICE_CURRENCY, FUND_BASE_CURRENCY)
+                .orElse(amountUsd);
     }
 }

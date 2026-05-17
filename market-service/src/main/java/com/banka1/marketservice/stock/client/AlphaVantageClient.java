@@ -86,7 +86,8 @@ public class AlphaVantageClient {
                     parseBigDecimal(globalQuote.get("05. price")),
                     parseBigDecimal(globalQuote.get("02. open")),
                     parseBigDecimal(globalQuote.get("08. previous close")),
-                    parseChangePercent(globalQuote.get("10. change percent"))
+                    parseChangePercent(globalQuote.get("10. change percent")),
+                    parseLong(globalQuote.get("06. volume"))
             );
         } catch (Exception ex) {
             log.error("AlphaVantage fetch failed za {}: {}", ticker, ex.toString());
@@ -105,5 +106,13 @@ public class AlphaVantageClient {
         return new BigDecimal(stripped);
     }
 
-    public record Quote(String ticker, BigDecimal price, BigDecimal open, BigDecimal previousClose, BigDecimal changePercent) {}
+    private Long parseLong(String s) {
+        try {
+            return s == null ? null : Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    public record Quote(String ticker, BigDecimal price, BigDecimal open, BigDecimal previousClose, BigDecimal changePercent, Long volume) {}
 }

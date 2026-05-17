@@ -431,6 +431,7 @@ public class AccountServiceImplementation implements AccountService {
         account.setBrojRacuna(dto.getAccountNumber());
         account.setNazivRacuna(dto.getDisplayName());
         account.setVlasnik(dto.getOwnerId());
+        account.setZaposlen(-1L);
         account.setImeVlasnikaRacuna("SYSTEM");
         account.setPrezimeVlasnikaRacuna(dto.getDisplayName());
         account.setUsername("system-" + dto.getOwnerId());

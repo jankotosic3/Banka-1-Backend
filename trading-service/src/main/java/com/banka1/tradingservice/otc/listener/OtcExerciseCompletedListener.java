@@ -3,7 +3,6 @@ package com.banka1.tradingservice.otc.listener;
 import com.banka1.tradingservice.otc.domain.OptionContract;
 import com.banka1.tradingservice.otc.domain.OptionContractStatus;
 import com.banka1.tradingservice.otc.repository.OptionContractRepository;
-import com.banka1.tradingservice.otc.service.OtcPortfolioService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.ExchangeTypes;
@@ -20,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class OtcExerciseCompletedListener {
 
     private final OptionContractRepository contractRepo;
-    private final OtcPortfolioService portfolioService;
 
     public record OtcExerciseCompletedEvent(Long contractId) {}
 
@@ -39,12 +37,9 @@ public class OtcExerciseCompletedListener {
             if (contract.getStatus() == OptionContractStatus.ACTIVE) {
                 contract.setStatus(OptionContractStatus.EXERCISED);
                 contractRepo.save(contract);
-                // Release the accept-time reservation. StockReservationService.transferOwnership()
-                // already decremented reservedQuantity for the SAGA's own step-2 reservation, but
-                // the original reserveForContract() increment (done at accept time) is separate and
-                // must be released here so reservedQuantity doesn't stay permanently inflated.
-                portfolioService.releaseForContract(contract.getSellerId(), contract.getStockTicker(), contract.getAmount());
-                log.info("OTC contract {} ACTIVE -> EXERCISED, accept-time reservation released", contract.getId());
+                // StockReservationService.transferOwnership() consumes the accept-time
+                // reservation and decrements both seller quantity and reservedQuantity.
+                log.info("OTC contract {} ACTIVE -> EXERCISED", contract.getId());
             } else {
                 log.info("OTC contract {} already in status {} — no-op", contract.getId(), contract.getStatus());
             }

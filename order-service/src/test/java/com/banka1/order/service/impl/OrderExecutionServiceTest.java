@@ -8,6 +8,7 @@ import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.BankAccountDto;
 import com.banka1.order.dto.ExchangeRateDto;
 import com.banka1.order.dto.StockListingDto;
+import com.banka1.order.dto.client.OneSidedTransactionDto;
 import com.banka1.order.dto.client.PaymentDto;
 import com.banka1.order.entity.ActuaryInfo;
 import com.banka1.order.entity.Order;
@@ -203,10 +204,10 @@ class OrderExecutionServiceTest {
         assertThat(transactionCaptor.getValue().getPricePerUnit()).isEqualByComparingTo("101.00");
         assertThat(transactionCaptor.getValue().getTotalPrice()).isEqualByComparingTo("202.00");
 
-        ArgumentCaptor<PaymentDto> transferCaptor = ArgumentCaptor.forClass(PaymentDto.class);
-        verify(accountClient).transaction(transferCaptor.capture());
-        assertThat(transferCaptor.getValue().getFromAccountNumber()).isEqualTo("1110001400000000221");
-        assertThat(transferCaptor.getValue().getToAccountNumber()).isEqualTo("1110001000000000023");
+        ArgumentCaptor<OneSidedTransactionDto> transferCaptor = ArgumentCaptor.forClass(OneSidedTransactionDto.class);
+        verify(accountClient).exchangeBuy(transferCaptor.capture());
+        assertThat(transferCaptor.getValue().getAccountNumber()).isEqualTo("1110001400000000221");
+        assertThat(transferCaptor.getValue().getAmount()).isEqualByComparingTo("202.00");
         assertThat(order.getStatus()).isEqualTo(OrderStatus.DONE);
         assertThat(order.getIsDone()).isTrue();
     }
@@ -265,7 +266,7 @@ class OrderExecutionServiceTest {
 
         assertThat(staleOrder.getRemainingPortions()).isEqualTo(5);
         assertThat(lockedOrder.getRemainingPortions()).isZero();
-        verify(accountClient).transaction(any(PaymentDto.class));
+        verify(accountClient).exchangeBuy(any(OneSidedTransactionDto.class));
         verify(transactionRepository).save(any(Transaction.class));
     }
 
@@ -369,17 +370,24 @@ class OrderExecutionServiceTest {
     }
 
     @Test
-    void sellExecution_reducesPortfolioAndTransfersProceeds() {
+    void sellExecution_reducesPortfolioTransfersGrossProceedsAndPaysBankFee() {
         order.setDirection(OrderDirection.SELL);
         portfolio.setQuantity(3);
 
         service.executeOrderPortion(order);
 
         verify(portfolioRepository, atLeastOnce()).save(portfolio);
-        ArgumentCaptor<PaymentDto> captor = ArgumentCaptor.forClass(PaymentDto.class);
-        verify(accountClient).transaction(captor.capture());
-        assertThat(captor.getValue().getFromAccountNumber()).isEqualTo("1110001000000000023");
-        assertThat(captor.getValue().getToAccountNumber()).isEqualTo("1110001400000000221");
+        ArgumentCaptor<OneSidedTransactionDto> proceedsCaptor = ArgumentCaptor.forClass(OneSidedTransactionDto.class);
+        verify(accountClient).exchangeSell(proceedsCaptor.capture());
+        assertThat(proceedsCaptor.getValue().getAccountNumber()).isEqualTo("1110001400000000221");
+        assertThat(proceedsCaptor.getValue().getAmount()).isEqualByComparingTo("198.00");
+
+        ArgumentCaptor<PaymentDto> feeCaptor = ArgumentCaptor.forClass(PaymentDto.class);
+        verify(accountClient).transaction(feeCaptor.capture());
+        assertThat(feeCaptor.getValue().getFromAccountNumber()).isEqualTo("1110001400000000221");
+        assertThat(feeCaptor.getValue().getToAccountNumber()).isEqualTo("1110001000000000023");
+        assertThat(feeCaptor.getValue().getFromAmount()).isEqualByComparingTo("7.00");
+        assertThat(feeCaptor.getValue().getToAmount()).isEqualByComparingTo("7.00");
     }
 
     @Test

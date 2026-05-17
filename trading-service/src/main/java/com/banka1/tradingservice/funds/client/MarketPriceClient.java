@@ -59,6 +59,11 @@ public class MarketPriceClient {
      * — caller (FundLiquidationService) ce fall-back-ovati na avgUnitPrice.
      */
     public Map<String, BigDecimal> currentPrices(List<String> tickers) {
+        return fetchSnapshots(tickers).entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().currentPrice()));
+    }
+
+    public Map<String, StockPrice> fetchSnapshots(List<String> tickers) {
         if (tickers == null || tickers.isEmpty()) {
             return Map.of();
         }
@@ -78,7 +83,7 @@ public class MarketPriceClient {
             }
             return prices.stream()
                     .filter(p -> p.ticker() != null && p.currentPrice() != null)
-                    .collect(Collectors.toMap(StockPrice::ticker, StockPrice::currentPrice, (a, b) -> a));
+                    .collect(Collectors.toMap(StockPrice::ticker, p -> p, (a, b) -> a));
         } catch (Exception ex) {
             log.warn("Market price fetch failed: {}", ex.toString());
             return Map.of();
@@ -88,6 +93,34 @@ public class MarketPriceClient {
     public Optional<BigDecimal> currentPrice(String ticker) {
         Map<String, BigDecimal> prices = currentPrices(List.of(ticker));
         return Optional.ofNullable(prices.get(ticker));
+    }
+
+    public Optional<BigDecimal> convertNoCommission(BigDecimal amount, String fromCurrency, String toCurrency) {
+        if (amount == null) {
+            return Optional.empty();
+        }
+        if (amount.signum() == 0 || fromCurrency == null || toCurrency == null
+                || fromCurrency.equalsIgnoreCase(toCurrency)) {
+            return Optional.of(amount);
+        }
+        try {
+            String token = currentBearerOrServiceToken();
+            ConversionResponse response = webClient(token).get()
+                    .uri(uriBuilder -> uriBuilder.path("/internal/calculate/no-commission")
+                            .queryParam("fromCurrency", fromCurrency)
+                            .queryParam("toCurrency", toCurrency)
+                            .queryParam("amount", amount.toPlainString())
+                            .build())
+                    .retrieve()
+                    .bodyToMono(ConversionResponse.class)
+                    .timeout(Duration.ofSeconds(5))
+                    .block();
+            return Optional.ofNullable(response == null ? null : response.toAmount());
+        } catch (Exception ex) {
+            log.warn("Market FX conversion failed {} {} -> {}: {}",
+                    amount, fromCurrency, toCurrency, ex.toString());
+            return Optional.empty();
+        }
     }
 
     private String currentBearerOrServiceToken() {
@@ -102,5 +135,12 @@ public class MarketPriceClient {
      * Subset of market-service StockPriceSnapshotDto — samo polja koja trading-service
      * koristi. Jackson ignorise unknown polja (default Spring Boot konfiguracija).
      */
-    public record StockPrice(String ticker, BigDecimal currentPrice) {}
+    public record StockPrice(String ticker, BigDecimal currentPrice, BigDecimal changePercent, Long volume) {}
+
+    public record ConversionResponse(String fromCurrency,
+                                     String toCurrency,
+                                     BigDecimal fromAmount,
+                                     BigDecimal toAmount,
+                                     BigDecimal rate,
+                                     BigDecimal commission) {}
 }

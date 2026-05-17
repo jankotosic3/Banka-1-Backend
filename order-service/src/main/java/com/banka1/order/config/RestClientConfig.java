@@ -95,4 +95,16 @@ public class RestClientConfig {
     public RestClient stockRestClient(RestClient.Builder builder, @Value("${services.stock.url}") String baseUrl) {
         return builder.baseUrl(baseUrl).build();
     }
+
+    /**
+     * RestClient for trading-service communication (fund holdings callbacks).
+     *
+     * @param builder  shared builder from {@link #restClientBuilder()}
+     * @param baseUrl  resolved from {@code services.trading.url} property
+     */
+    @Bean
+    public RestClient tradingRestClient(RestClient.Builder builder,
+            @Value("${services.trading.url:http://trading-service:8091}") String baseUrl) {
+        return builder.baseUrl(baseUrl).build();
+    }
 }

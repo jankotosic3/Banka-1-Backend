@@ -81,6 +81,7 @@ public class StockPriceFeedService {
                         .openPrice(quote.open())
                         .previousClose(quote.previousClose())
                         .changePercent(quote.changePercent())
+                        .volume(quote.volume())
                         .currency("USD")  // AlphaVantage vraca USD za US listings; multi-currency je TBD
                         .timestamp(Instant.now())
                         .build();
@@ -95,6 +96,7 @@ public class StockPriceFeedService {
                 .openPrice(new BigDecimal("148.00"))
                 .previousClose(new BigDecimal("149.50"))
                 .changePercent(new BigDecimal("0.50"))
+                .volume(1_000_000L)
                 .currency("USD")
                 .timestamp(Instant.now())
                 .build();

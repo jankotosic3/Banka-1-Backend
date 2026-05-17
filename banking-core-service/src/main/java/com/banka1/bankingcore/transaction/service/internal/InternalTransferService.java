@@ -1,6 +1,7 @@
 package com.banka1.bankingcore.transaction.service.internal;
 
 import com.banka1.bankingcore.account.client.AccountServiceClient;
+import com.banka1.bankingcore.market.client.MarketServiceClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -30,6 +31,7 @@ public class InternalTransferService {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectProvider<AccountServiceClient> accountServiceClientProvider;
+    private final ObjectProvider<MarketServiceClient> marketServiceClientProvider;
 
     @Transactional
     public Transfer transfer(String fromAccount, String toAccount, BigDecimal amount, String correlationId) {
@@ -37,15 +39,42 @@ public class InternalTransferService {
         AccountServiceClient.AccountDetails source = client.getByNumber(fromAccount);
         AccountServiceClient.AccountDetails target = client.getByNumber(toAccount);
 
+        String sourceCurrency = source.currency() != null ? source.currency() : "RSD";
+        String targetCurrency = target.currency() != null ? target.currency() : sourceCurrency;
+        BigDecimal creditedAmount = amount;
+        BigDecimal commission = BigDecimal.ZERO;
+
         client.debit(fromAccount, amount, source.ownerId());
-        client.credit(toAccount, amount, target.ownerId());
+        if (sourceCurrency.equals(targetCurrency)) {
+            client.credit(toAccount, amount, target.ownerId());
+        } else {
+            MarketServiceClient market = marketServiceClientOrThrow();
+            MarketServiceClient.ConversionResponse gross = market.convertCurrency(amount, sourceCurrency, targetCurrency);
+            if (gross == null || gross.commission() == null) {
+                throw new IllegalStateException("Market-service nije vratio FX proviziju za interni transfer.");
+            }
+            commission = gross.commission();
+            BigDecimal netSourceAmount = amount.subtract(commission);
+            if (netSourceAmount.signum() <= 0) {
+                throw new IllegalArgumentException("Iznos transfera ne pokriva FX proviziju.");
+            }
+            MarketServiceClient.ConversionResponse net = market.convertCurrencyNoCommission(
+                    netSourceAmount, sourceCurrency, targetCurrency);
+            if (net == null || net.toAmount() == null) {
+                throw new IllegalStateException("Market-service nije vratio FX konverziju za interni transfer.");
+            }
+            creditedAmount = net.toAmount();
+            client.credit(toAccount, creditedAmount, target.ownerId());
+
+            AccountServiceClient.AccountDetails bankSourceAccount = client.getBankAccount(sourceCurrency);
+            client.credit(bankSourceAccount.accountNumber(), commission, bankSourceAccount.ownerId());
+        }
 
         UUID transferId = UUID.randomUUID();
-        String currency = source.currency() != null ? source.currency() : "RSD";
         jdbcTemplate.update(
                 "INSERT INTO internal_transfer_log (transfer_id, correlation_id, from_account, to_account, amount, currency, status) "
                         + "VALUES (?::uuid, ?, ?, ?, ?, ?, 'COMPLETED')",
-                transferId.toString(), correlationId, fromAccount, toAccount, amount, currency);
+                transferId.toString(), correlationId, fromAccount, toAccount, amount, sourceCurrency);
 
         // Write a payment_table record so the transfer appears in the user-facing transaction list.
         // ON CONFLICT DO NOTHING makes this safe on SAGA retries (correlationId is the order_number).
@@ -55,17 +84,17 @@ public class InternalTransferService {
                         + " sender_client_id, recipient_client_id, recipient_name, "
                         + " payment_code, reference_number, payment_purpose, status, "
                         + " from_currency, to_currency, order_number, created_at, updated_at, version) "
-                        + "VALUES (?, ?, ?, ?, 0, ?, ?, ?, '289', ?, ?, 'COMPLETED', ?, ?, ?, NOW(), NOW(), 0) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '289', ?, ?, 'COMPLETED', ?, ?, ?, NOW(), NOW(), 0) "
                         + "ON CONFLICT (order_number) DO NOTHING",
-                fromAccount, toAccount, amount, amount,
+                fromAccount, toAccount, amount, creditedAmount, commission,
                 source.ownerId(), target.ownerId(),
                 "Account " + toAccount,
                 correlationId, "OTC transfer",
-                currency, currency,
+                sourceCurrency, targetCurrency,
                 correlationId);
 
-        log.info("Internal transfer OK: from={} to={} amount={} transferId={} correlationId={}",
-                fromAccount, toAccount, amount, transferId, correlationId);
+        log.info("Internal transfer OK: from={} to={} amount={} credited={} commission={} transferId={} correlationId={}",
+                fromAccount, toAccount, amount, creditedAmount, commission, transferId, correlationId);
         return new Transfer(transferId.toString(), "COMPLETED");
     }
 
@@ -114,6 +143,14 @@ public class InternalTransferService {
         AccountServiceClient client = accountServiceClientProvider.getIfAvailable();
         if (client == null) {
             throw new IllegalStateException("AccountServiceClient nije dostupan.");
+        }
+        return client;
+    }
+
+    private MarketServiceClient marketServiceClientOrThrow() {
+        MarketServiceClient client = marketServiceClientProvider.getIfAvailable();
+        if (client == null) {
+            throw new IllegalStateException("MarketServiceClient nije dostupan.");
         }
         return client;
     }

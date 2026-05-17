@@ -12,10 +12,8 @@ import org.springframework.web.client.RestClient;
 /**
  * Definise RestClient bean-ove ka okolnim servisima (PR_14 C14.4).
  *
- * <p>Trenutno samo {@code accountRestClient} jer banking-core za margin add/withdraw
- * i bank-to-exchange transfer treba da pozove account-service /internal/accounts
- * endpoint-e. Ako u buducnosti bude trebalo zvati i druge servise (npr. exchange-service),
- * dodaj nove bean-ove ovde.
+ * <p>Banking-core zove account-service za debit/credit operacije, a market-service
+ * za interne FX kalkulacije kod cross-currency settlement-a.
  *
  * <p>Profil "!local" je iskljucen radi paritet-a sa order-service-om: u local profilu
  * neke od dependency property-ja nisu setovane (services.account.url) pa bi bean
@@ -44,6 +42,11 @@ public class RestClientConfig {
 
     @Bean
     public RestClient accountRestClient(RestClient.Builder builder, @Value("${services.account.url}") String baseUrl) {
+        return builder.baseUrl(baseUrl).build();
+    }
+
+    @Bean
+    public RestClient marketRestClient(RestClient.Builder builder, @Value("${services.exchange.url}") String baseUrl) {
         return builder.baseUrl(baseUrl).build();
     }
 }

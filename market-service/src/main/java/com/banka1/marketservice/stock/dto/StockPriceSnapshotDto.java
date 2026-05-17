@@ -22,6 +22,7 @@ public class StockPriceSnapshotDto {
     private BigDecimal previousClose;
     /** Procenat promene od previous close. */
     private BigDecimal changePercent;
+    private Long volume;
     /** Valuta u kojoj je price (USD, EUR, RSD itd.). */
     private String currency;
     private Instant timestamp;

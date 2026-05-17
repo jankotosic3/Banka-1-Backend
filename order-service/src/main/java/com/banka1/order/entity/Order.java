@@ -3,6 +3,7 @@ package com.banka1.order.entity;
 import com.banka1.order.entity.enums.OrderDirection;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.entity.enums.PurchaseFor;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -108,6 +109,21 @@ public class Order {
     /** Commission-free RSD exposure reserved for pending/approved agent orders. */
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal reservedLimitExposure = BigDecimal.ZERO;
+
+    /**
+     * Indicates who this BUY order is purchasing for (bank or investment fund).
+     * Null means the standard flow: securities go to the user's own portfolio.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "purchase_for", length = 20)
+    private PurchaseFor purchaseFor;
+
+    /**
+     * ID of the investment fund this order is buying for.
+     * Only set when {@link #purchaseFor} is {@link PurchaseFor#INVESTMENT_FUND}.
+     */
+    @Column(name = "fund_id")
+    private Long fundId;
 
     /** Updates the lastModification timestamp on every persist and update. */
     @PrePersist

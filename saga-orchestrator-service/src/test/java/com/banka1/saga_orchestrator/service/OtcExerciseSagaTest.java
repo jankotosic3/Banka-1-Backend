@@ -2,6 +2,7 @@ package com.banka1.saga_orchestrator.service;
 
 import com.banka1.saga_orchestrator.client.BankingCoreClient;
 import com.banka1.saga_orchestrator.client.MarketServiceClient;
+import com.banka1.saga_orchestrator.client.TradingServiceClient;
 import com.banka1.saga_orchestrator.domain.SagaInstance;
 import com.banka1.saga_orchestrator.domain.SagaState;
 import com.banka1.saga_orchestrator.domain.SagaType;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -28,7 +30,9 @@ class OtcExerciseSagaTest {
     @Mock private SagaInstanceRepository sagaRepo;
     @Mock private BankingCoreClient banking;
     @Mock private MarketServiceClient market;
+    @Mock private TradingServiceClient trading;
     @Mock private ObjectMapper objectMapper;
+    @Mock private RabbitTemplate rabbitTemplate;
 
     @InjectMocks private OtcExerciseSaga saga;
 
@@ -48,16 +52,18 @@ class OtcExerciseSagaTest {
         when(sagaRepo.findBySagaTypeAndCorrelationId(SagaType.OTC_EXERCISE, "1"))
                 .thenReturn(Optional.empty());
         when(sagaRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(banking.reserveFunds(eq(100L), any(), eq("1")))
+        when(market.convertCurrencyNoCommission(any(), eq("USD"), eq("RSD")))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(banking.reserveFunds(eq(100L), any(), eq("otc-exercise-1")))
                 .thenReturn(new BankingCoreClient.ReservationResult("res-1", "OK"));
-        when(market.reserveStocks(eq(200L), eq("AAPL"), eq(10), eq("1")))
-                .thenReturn(new MarketServiceClient.StockReservationResult("stock-1", "OK"));
+        when(trading.reserveStocks(eq(200L), eq("AAPL"), eq(10), eq("otc-exercise-1")))
+                .thenReturn(new TradingServiceClient.StockReservationResult("stock-1", "OK"));
         when(banking.resolveDefaultAccountNumber(100L)).thenReturn("BUYER-ACC");
         when(banking.resolveDefaultAccountNumber(200L)).thenReturn("SELLER-ACC");
-        when(banking.internalTransfer(eq("BUYER-ACC"), eq("SELLER-ACC"), any(), eq("1")))
+        when(banking.internalTransfer(eq("BUYER-ACC"), eq("SELLER-ACC"), any(), eq("otc-exercise-1")))
                 .thenReturn(new BankingCoreClient.TransferResult("tx-1", "OK"));
-        when(market.transferOwnership(eq("stock-1"), eq(100L), eq("1")))
-                .thenReturn(new MarketServiceClient.OwnershipTransferResult("own-1", "OK"));
+        when(trading.transferOwnership(eq("stock-1"), eq(100L), eq("otc-exercise-1")))
+                .thenReturn(new TradingServiceClient.OwnershipTransferResult("own-1", "OK"));
 
         saga.run(exerciseEvent());
 
@@ -70,10 +76,12 @@ class OtcExerciseSagaTest {
         when(sagaRepo.findBySagaTypeAndCorrelationId(SagaType.OTC_EXERCISE, "1"))
                 .thenReturn(Optional.empty());
         when(sagaRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(banking.reserveFunds(eq(100L), any(), eq("1")))
+        when(market.convertCurrencyNoCommission(any(), eq("USD"), eq("RSD")))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(banking.reserveFunds(eq(100L), any(), eq("otc-exercise-1")))
                 .thenReturn(new BankingCoreClient.ReservationResult("res-1", "OK"));
-        when(market.reserveStocks(eq(200L), eq("AAPL"), eq(10), eq("1")))
-                .thenReturn(new MarketServiceClient.StockReservationResult("stock-1", "OK"));
+        when(trading.reserveStocks(eq(200L), eq("AAPL"), eq(10), eq("otc-exercise-1")))
+                .thenReturn(new TradingServiceClient.StockReservationResult("stock-1", "OK"));
         when(banking.resolveDefaultAccountNumber(anyLong())).thenReturn("ACC");
         when(banking.internalTransfer(any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("Banking down"));
@@ -81,8 +89,8 @@ class OtcExerciseSagaTest {
         saga.run(exerciseEvent());
 
         // Compensations: step2 + step1 (kompenzacija u obrnutom redosledu)
-        verify(market).releaseStocks("stock-1", "1");
-        verify(banking).releaseFunds("res-1", "1");
+        verify(trading).releaseStocks("stock-1", "otc-exercise-1");
+        verify(banking).releaseFunds("res-1", "otc-exercise-1");
         verify(sagaRepo, atLeast(1)).save(argThat(s -> s.getState() == SagaState.FAILED));
     }
 
@@ -96,6 +104,6 @@ class OtcExerciseSagaTest {
         saga.run(exerciseEvent());
 
         verify(banking, never()).reserveFunds(anyLong(), any(), any());
-        verify(market, never()).reserveStocks(anyLong(), any(), anyInt(), any());
+        verify(trading, never()).reserveStocks(anyLong(), any(), anyInt(), any());
     }
 }

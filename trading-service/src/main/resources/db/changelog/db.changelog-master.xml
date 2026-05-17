@@ -36,4 +36,13 @@
     <!-- OTC_EXERCISE SAGA: stock_reservations + stock_ownership_transfers tabele. -->
     <include file="db/changelog/trading-otc/007-stock-reservations.sql"/>
 
+    <!-- DEV-only consistency cleanup for investment fund fixtures. -->
+    <include file="db/changelog/trading-otc/008-fund-seed-consistency.sql"/>
+
+    <!-- DEV-only account-number length cleanup for fund settlement accounts. -->
+    <include file="db/changelog/trading-otc/009-fund-account-number-length.sql"/>
+
+    <!-- DEV-only normalized RSD-only multi-fund fixtures. -->
+    <include file="db/changelog/trading-otc/010-fund-seed-rsd-multi-funds.sql"/>
+
 </databaseChangeLog>

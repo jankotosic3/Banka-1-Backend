@@ -51,4 +51,13 @@
          account_concrete / account_ownership_type → NPE u AccountResponseDto. -->
     <include file="db/changelog/account/014-fix-mile-fx-accounts-ownership.sql"/>
 
+    <!-- DEV-only fund account fixtures used by investment-fund scenarios. -->
+    <include file="db/changelog/account/015-seed-fund-accounts.sql"/>
+
+    <!-- DEV-only correction: internal debit/credit accepts 18/19 digit account numbers. -->
+    <include file="db/changelog/account/016-fix-fund-account-number-length.sql"/>
+
+    <!-- DEV-only normalized RSD-only fund settlement accounts. -->
+    <include file="db/changelog/account/017-fund-rsd-accounts.sql"/>
+
 </databaseChangeLog>

@@ -67,7 +67,7 @@ public class InvestmentFund {
     private BigDecimal likvidnaSredstva = BigDecimal.ZERO;
 
     @NotBlank
-    @Column(name = "account_number", nullable = false, unique = true, length = 16)
+    @Column(name = "account_number", nullable = false, unique = true, length = 50)
     private String accountNumber;
 
     @NotNull

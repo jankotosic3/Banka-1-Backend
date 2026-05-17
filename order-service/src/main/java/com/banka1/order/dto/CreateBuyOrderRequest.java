@@ -42,4 +42,18 @@ public class CreateBuyOrderRequest {
     /** ID of the account to debit funds from. Must be positive and belong to the authenticated user. */
     @Positive
     private Long accountId;
+
+    /**
+     * Optional: who this BUY order is purchasing for.
+     * Accepted values: {@code "INVESTMENT_FUND"} and {@code "BANK"}.
+     * When omitted or null the standard flow applies (securities go to the user's own portfolio).
+     */
+    private String purchaseFor;
+
+    /**
+     * ID of the investment fund to buy for. Required when {@code purchaseFor = "INVESTMENT_FUND"}.
+     * The {@code accountId} must be the fund's RSD account ID in account-service.
+     */
+    @Positive
+    private Long fundId;
 }

@@ -2,6 +2,7 @@ package com.banka1.saga_orchestrator.client;
 
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,8 +12,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.Duration;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * REST klijent ka {@code trading-service} (PR_15 C15.3).
@@ -35,12 +42,45 @@ public class TradingServiceClient {
     @Value("${services.trading.internal-token:}")
     private String internalToken;
 
+    @Value("${jwt.secret}")
+    private String jwtSecret;
+
+    private final ObjectMapper objectMapper;
+
     private WebClient webClient() {
         return WebClient.builder()
                 .baseUrl(baseUrl)
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + internalToken)
+                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + bearerToken())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build();
+    }
+
+    private String bearerToken() {
+        if (internalToken != null && !internalToken.isBlank()) {
+            return internalToken;
+        }
+        try {
+            Map<String, Object> header = Map.of("alg", "HS256", "typ", "JWT");
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("iss", "banka1");
+            payload.put("sub", "saga-orchestrator-service");
+            payload.put("id", -999L);
+            payload.put("roles", "SERVICE");
+            payload.put("permissions", java.util.List.of());
+            payload.put("exp", Instant.now().plus(Duration.ofMinutes(10)).getEpochSecond());
+
+            String unsigned = base64Url(objectMapper.writeValueAsBytes(header))
+                    + "." + base64Url(objectMapper.writeValueAsBytes(payload));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(jwtSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return unsigned + "." + base64Url(mac.doFinal(unsigned.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Ne mogu da generisem SERVICE JWT za trading-service.", ex);
+        }
+    }
+
+    private String base64Url(byte[] bytes) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     /**

@@ -4,6 +4,7 @@ import com.banka1.order.client.AccountClient;
 import com.banka1.order.client.EmployeeClient;
 import com.banka1.order.client.ExchangeClient;
 import com.banka1.order.client.StockClient;
+import com.banka1.order.client.TradingServiceClient;
 import com.banka1.order.dto.AccountDetailsDto;
 import com.banka1.order.dto.AuthenticatedUser;
 import com.banka1.order.dto.BankAccountDto;
@@ -25,6 +26,7 @@ import com.banka1.order.entity.enums.OrderDirection;
 import com.banka1.order.entity.enums.OrderOverviewStatusFilter;
 import com.banka1.order.entity.enums.OrderStatus;
 import com.banka1.order.entity.enums.OrderType;
+import com.banka1.order.entity.enums.PurchaseFor;
 import com.banka1.order.exception.BadRequestException;
 import com.banka1.order.exception.BusinessConflictException;
 import com.banka1.order.exception.ForbiddenOperationException;
@@ -97,6 +99,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     private final EmployeeClient employeeClient;
     private final ExchangeClient exchangeClient;
     private final OrderExecutionService orderExecutionService;
+    private final TradingServiceClient tradingServiceClient;
     private final OrderNotificationProducer orderNotificationProducer;
 
     @Override
@@ -104,29 +107,75 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     public OrderResponse createBuyOrder(AuthenticatedUser user, CreateBuyOrderRequest request) {
         validateBuyOrderRequest(request);
 
+        PurchaseFor purchaseFor = parsePurchaseFor(request.getPurchaseFor());
+        boolean isFundOrder = purchaseFor == PurchaseFor.INVESTMENT_FUND;
+        boolean isBankOrder = purchaseFor == PurchaseFor.BANK;
+        if (isFundOrder || isBankOrder) {
+            validateInstitutionalBuyOrderRequest(user, request, purchaseFor);
+        }
+
         StockListingDto listing = stockClient.getListing(request.getListingId());
         validateTradingAccess(user, listing);
         ExchangeWindow exchangeWindow = resolveExchangeWindow(listing);
-        Long accountId = initialBuyAccountId(user, request.getAccountId(), listing.getCurrency());
-        if (user.isClient()) {
-            validateClientAccount(user.userId(), accountId);
+
+        Long accountId;
+        if (isFundOrder) {
+            accountId = request.getAccountId();
+        } else if (isBankOrder) {
+            accountId = employeeClient.getBankAccount(listing.getCurrency()).getAccountId();
+        } else {
+            accountId = initialBuyAccountId(user, request.getAccountId(), listing.getCurrency());
+            if (user.isClient()) {
+                validateClientAccount(user.userId(), accountId);
+            }
         }
+
         OrderType orderType = determineOrderType(request.getLimitValue(), request.getStopValue());
         BigDecimal approximatePrice = calculateApproximatePrice(orderType, OrderDirection.BUY, listing, request.getQuantity(),
                 request.getLimitValue(), request.getStopValue());
         BigDecimal fee = calculateFee(orderType, approximatePrice, listing.getCurrency());
-        if (user.isClient() && !Boolean.TRUE.equals(request.getMargin())) {
+        if ((isFundOrder || isBankOrder) && !Boolean.TRUE.equals(request.getMargin())) {
+            checkFunds(accountId, approximatePrice.add(fee), listing.getCurrency());
+        } else if (user.isClient() && !Boolean.TRUE.equals(request.getMargin())) {
             checkFunds(accountId, approximatePrice.add(fee), listing.getCurrency());
         }
 
         Order order = buildBaseOrder(user.userId(), request.getListingId(), orderType, request.getQuantity(), listing,
                 request.getLimitValue(), request.getStopValue(), OrderDirection.BUY, request.getAllOrNone(),
                 request.getMargin(), accountId, exchangeWindow);
+        if (isFundOrder || isBankOrder) {
+            order.setPurchaseFor(purchaseFor);
+            order.setFundId(request.getFundId());
+        }
         order.setStatus(OrderStatus.PENDING_CONFIRMATION);
         order.setApprovedBy(null);
 
         order = orderRepository.save(order);
         return mapToResponse(order, approximatePrice, fee, exchangeWindow.closed());
+    }
+
+    private PurchaseFor parsePurchaseFor(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return PurchaseFor.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException("Unsupported purchaseFor: " + value);
+        }
+    }
+
+    private void validateInstitutionalBuyOrderRequest(AuthenticatedUser user, CreateBuyOrderRequest request, PurchaseFor purchaseFor) {
+        if (user.isClient()) {
+            throw new ForbiddenOperationException("Clients cannot buy securities for institutional accounts");
+        }
+        if (purchaseFor == PurchaseFor.INVESTMENT_FUND && request.getFundId() == null) {
+            throw new BadRequestException("fundId is required when purchaseFor is INVESTMENT_FUND");
+        }
+        if (purchaseFor == PurchaseFor.INVESTMENT_FUND && request.getAccountId() == null) {
+            throw new BadRequestException("accountId is required for fund buy orders");
+        }
+        // BANK orders resolve accountId automatically from the bank's currency account.
     }
 
     @Override
@@ -231,11 +280,16 @@ public class OrderCreationServiceImpl implements OrderCreationService {
             return mapToResponse(order, approximatePrice, fee, order.getExchangeClosed());
         }
 
-        Long fundingAccountId = user.isClient()
-                ? order.getAccountId()
-                : determineFundingAccountId(user.userId(), order.getAccountId(), listing.getCurrency());
-        if (order.getDirection() == OrderDirection.BUY && !user.isClient()) {
-            order.setAccountId(fundingAccountId);
+        Long fundingAccountId;
+        if (order.getPurchaseFor() == PurchaseFor.INVESTMENT_FUND) {
+            fundingAccountId = order.getAccountId(); // fund's account — already resolved at creation
+        } else if (user.isClient()) {
+            fundingAccountId = order.getAccountId();
+        } else {
+            fundingAccountId = determineFundingAccountId(user.userId(), order.getAccountId(), listing.getCurrency());
+            if (order.getDirection() == OrderDirection.BUY) {
+                order.setAccountId(fundingAccountId);
+            }
         }
         if (Boolean.TRUE.equals(order.getMargin())) {
             checkMarginRequirements(user, fundingAccountId, listing, order.getQuantity());
@@ -253,7 +307,10 @@ public class OrderCreationServiceImpl implements OrderCreationService {
             // transferFee bezuslovno skidao fee sa klijentskog racuna pre proceeds-a, sto
             // je padalo 422 "Nema dovoljno novca" kad je RSD/USD account prazan.
             if (order.getDirection() == OrderDirection.BUY) {
-                transferFee(user, fundingAccountId, fee, listing.getCurrency());
+                BigDecimal feeDebitAmount = transferFee(user, fundingAccountId, fee, listing.getCurrency());
+                if (order.getPurchaseFor() == PurchaseFor.INVESTMENT_FUND) {
+                    notifyFundLiquidityDebit(order, feeDebitAmount, "Order fee");
+                }
             }
             // Pull fresh quote data so the async executor (60s later) sees a non-zero
             // ask/volume even on weekends, when ListingMarketDataScheduler skips refresh
@@ -320,7 +377,10 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                 order.getQuantity(), order.getLimitValue(), order.getStopValue());
         BigDecimal fee = calculateFee(orderPricingFamily(order.getOrderType()), approximatePrice, listing.getCurrency());
         Long fundingAccountId = determineFundingAccountId(order.getUserId(), order.getAccountId(), listing.getCurrency());
-        transferFee(order.getUserId(), fundingAccountId, fee, listing.getCurrency());
+        BigDecimal feeDebitAmount = transferFee(order.getUserId(), fundingAccountId, fee, listing.getCurrency());
+        if (order.getPurchaseFor() == PurchaseFor.INVESTMENT_FUND) {
+            notifyFundLiquidityDebit(order, feeDebitAmount, "Order fee");
+        }
 
         if (order.getDirection() == OrderDirection.BUY && !Boolean.TRUE.equals(order.getMargin())) {
             checkFunds(fundingAccountId, approximatePrice, listing.getCurrency());
@@ -598,7 +658,12 @@ public class OrderCreationServiceImpl implements OrderCreationService {
     }
 
     private void checkFunds(Long accountId, BigDecimal totalAmount, String amountCurrency) {
-        AccountDetailsDto account = accountClient.getAccountDetails(accountId);
+        AccountDetailsDto account;
+        try {
+            account = accountClient.getAccountDetails(accountId);
+        } catch (org.springframework.web.client.HttpClientErrorException.NotFound ex) {
+            throw new BadRequestException("Account not found: " + accountId);
+        }
         BigDecimal balance = account.getBalance() == null ? BigDecimal.ZERO : account.getBalance();
         BigDecimal amountInAccountCurrency = convertAmountWithoutCommission(amountCurrency, account.getCurrency(), totalAmount);
         if (balance.compareTo(amountInAccountCurrency) < 0) {
@@ -627,20 +692,20 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         return orderType == OrderType.STOP_LIMIT ? OrderType.LIMIT : orderType;
     }
 
-    private void transferFee(AuthenticatedUser user, Long fundingAccountId, BigDecimal fee, String currency) {
-        transferFee(fundingAccountId, fee, currency, user.isClient());
+    private BigDecimal transferFee(AuthenticatedUser user, Long fundingAccountId, BigDecimal fee, String currency) {
+        return transferFee(fundingAccountId, fee, currency, user.isClient());
     }
 
-    private void transferFee(Long userId, Long fundingAccountId, BigDecimal fee, String currency) {
-        transferFee(fundingAccountId, fee, currency, !isEmployeeUser(userId));
+    private BigDecimal transferFee(Long userId, Long fundingAccountId, BigDecimal fee, String currency) {
+        return transferFee(fundingAccountId, fee, currency, !isEmployeeUser(userId));
     }
 
-    private void transferFee(Long fundingAccountId, BigDecimal fee, String currency, boolean applyConversionFee) {
+    private BigDecimal transferFee(Long fundingAccountId, BigDecimal fee, String currency, boolean applyConversionFee) {
         BankAccountDto bankAccount = employeeClient.getBankAccount(currency);
         if (fundingAccountId != null && fundingAccountId.equals(bankAccount.getAccountId())) {
-            return;
+            return BigDecimal.ZERO;
         }
-        transferWithConversionIfNeeded(fundingAccountId, bankAccount.getAccountId(), fee, currency, applyConversionFee, "Order fee");
+        return transferWithConversionIfNeeded(fundingAccountId, bankAccount.getAccountId(), fee, currency, applyConversionFee, "Order fee");
     }
 
     private boolean hasPastSettlementDate(StockListingDto listing) {
@@ -650,15 +715,18 @@ public class OrderCreationServiceImpl implements OrderCreationService {
 
     private Long determineFundingAccountId(Long userId, Long selectedAccountId, String currency) {
         if (actuaryInfoRepository.findByEmployeeId(userId).isPresent()) {
-            return employeeClient.getBankAccount(currency).getAccountId(); // actuaries → bank account
+            return employeeClient.getBankAccount(currency).getAccountId();
         }
         try {
             EmployeeDto employee = employeeClient.getEmployee(userId);
             if (employee != null) {
-                return selectedAccountId; // non-actuary employees → own account
+                // Employee explicitly selected an account — use it; otherwise fall back to bank account.
+                if (selectedAccountId != null) {
+                    return selectedAccountId;
+                }
+                return employeeClient.getBankAccount(currency).getAccountId();
             }
         } catch (RuntimeException ignored) {
-            // Non-employee users are expected to fund orders from their selected account.
         }
         return selectedAccountId;
     }
@@ -890,7 +958,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
         order.setReservedLimitExposure(order.getReservedLimitExposure().subtract(releasable).max(BigDecimal.ZERO));
     }
 
-    private void transferWithConversionIfNeeded(Long fromAccountId, Long toAccountId, BigDecimal targetAmount, String targetCurrency,
+    private BigDecimal transferWithConversionIfNeeded(Long fromAccountId, Long toAccountId, BigDecimal targetAmount, String targetCurrency,
                                                 boolean applyConversionFee, String description) {
         AccountDetailsDto fromAccount = accountClient.getAccountDetails(fromAccountId);
         AccountDetailsDto toAccount = accountClient.getAccountDetails(toAccountId);
@@ -904,7 +972,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                     fromAccount.getOwnerId()
             );
             executePaymentByOwnership(fromAccount, toAccount, payment);
-            return;
+            return targetAmount;
         }
 
         // Convert targetAmount (in targetCurrency, e.g. 7 USD) to fromAccount's currency
@@ -923,6 +991,7 @@ public class OrderCreationServiceImpl implements OrderCreationService {
                 fromAccount.getOwnerId()
         );
         executePaymentByOwnership(fromAccount, toAccount, payment);
+        return fromAmount;
     }
 
     /**
@@ -956,6 +1025,18 @@ public class OrderCreationServiceImpl implements OrderCreationService {
             return employeeClient.getEmployee(userId) != null;
         } catch (RuntimeException ignored) {
             return false;
+        }
+    }
+
+    private void notifyFundLiquidityDebit(Order order, BigDecimal amount, String reason) {
+        if (order.getFundId() == null || amount == null || amount.signum() <= 0) {
+            return;
+        }
+        try {
+            tradingServiceClient.debitFundLiquidity(order.getFundId(), amount, reason);
+        } catch (Exception ex) {
+            log.error("Failed to debit fund liquidity for order {} (fundId={} amount={}): {}",
+                    order.getId(), order.getFundId(), amount, ex.toString());
         }
     }
 

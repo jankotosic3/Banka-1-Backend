@@ -57,7 +57,7 @@ public class OtcExerciseSaga {
         String correlationId = String.valueOf(event.get("contractId"));
 
         SagaInstance existing = sagaRepo.findBySagaTypeAndCorrelationId(SagaType.OTC_EXERCISE, correlationId).orElse(null);
-        if (existing != null && existing.isFinalState()) {
+        if (existing != null && existing.getState() == SagaState.COMPLETED) {
             log.info("OTC_EXERCISE saga {} vec u terminal state-u {} — preskocenam", correlationId, existing.getState());
             return;
         }
@@ -67,6 +67,13 @@ public class OtcExerciseSaga {
         }
 
         SagaInstance saga = (existing != null) ? existing : initialize(correlationId, event);
+        boolean retryingFailedSaga = saga.getState() == SagaState.FAILED;
+        if (retryingFailedSaga) {
+            saga.setRetryCount(saga.getRetryCount() + 1);
+        }
+        String exerciseCorrelationId = retryingFailedSaga
+                ? "otc-exercise-" + correlationId + "-retry-" + saga.getRetryCount()
+                : "otc-exercise-" + correlationId;
         saga.setState(SagaState.IN_PROGRESS);
         sagaRepo.save(saga);
 
@@ -78,7 +85,7 @@ public class OtcExerciseSaga {
         BigDecimal totalCost = pricePerStock.multiply(BigDecimal.valueOf(amount));
 
         Map<String, Object> compensationLog = new LinkedHashMap<>();
-        if (saga.getCompensationLog() instanceof Map<?, ?> existingLog) {
+        if (!retryingFailedSaga && saga.getCompensationLog() instanceof Map<?, ?> existingLog) {
             compensationLog.putAll((Map<String, Object>) existingLog);
         }
 
@@ -92,14 +99,16 @@ public class OtcExerciseSaga {
             // Svrha: pre-check da kupac ima sredstva pre nego sto rezervisemo hartije.
             // Rollback: releaseFunds kredituje kupca nazad (HELD -> RELEASED).
             saga.setCurrentStep(1);
-            BankingCoreClient.ReservationResult reservation = banking.reserveFunds(buyerId, totalCostRsd, correlationId);
+            BankingCoreClient.ReservationResult reservation = banking.reserveFunds(
+                    buyerId, totalCostRsd, exerciseCorrelationId);
             compensationLog.put("step1_reservationId", reservation.reservationId());
             log.info("OTC_EXERCISE saga {} step 1 OK (reservation: {})", correlationId, reservation.reservationId());
 
             // Step 2: Provera i rezervacija hartija u posedstvu Prodavca.
             // Rollback: releaseStocks oslobadja rezervaciju.
             saga.setCurrentStep(2);
-            TradingServiceClient.StockReservationResult stockRes = trading.reserveStocks(sellerId, stockTicker, amount, correlationId);
+            TradingServiceClient.StockReservationResult stockRes = trading.reserveStocks(
+                    sellerId, stockTicker, amount, exerciseCorrelationId);
             compensationLog.put("step2_stocksReservationId", stockRes.reservationId());
             log.info("OTC_EXERCISE saga {} step 2 OK (stocks: {})", correlationId, stockRes.reservationId());
 
@@ -109,23 +118,29 @@ public class OtcExerciseSaga {
             // Neto efekat: kupac placa tacno jednom, prodavac prima sredstva.
             // Rollback: reverseTransfer vraca sredstva kupcu; releaseFunds za step1 je no-op.
             saga.setCurrentStep(3);
-            banking.releaseFunds(reservation.reservationId(), correlationId);
+            banking.releaseFunds(reservation.reservationId(), exerciseCorrelationId);
             String buyerAccount = banking.resolveDefaultAccountNumber(buyerId);
             String sellerAccount = banking.resolveDefaultAccountNumber(sellerId);
-            BankingCoreClient.TransferResult transfer = banking.internalTransfer(buyerAccount, sellerAccount, totalCostRsd, correlationId);
+            BankingCoreClient.TransferResult transfer = banking.internalTransfer(
+                    buyerAccount, sellerAccount, totalCostRsd, exerciseCorrelationId);
             compensationLog.put("step3_transferId", transfer.transferId());
             log.info("OTC_EXERCISE saga {} step 3 OK (transfer {} RSD, id: {})", correlationId, totalCostRsd, transfer.transferId());
 
             // Step 4: Transfer vlasnistva nad hartijama na Kupca.
             // Rollback: reverseOwnership vraca hartije prodavcu.
             saga.setCurrentStep(4);
-            TradingServiceClient.OwnershipTransferResult ownership = trading.transferOwnership(stockRes.reservationId(), buyerId, correlationId);
+            TradingServiceClient.OwnershipTransferResult ownership = trading.transferOwnership(
+                    stockRes.reservationId(), buyerId, exerciseCorrelationId);
             compensationLog.put("step4_ownershipTransferId", ownership.ownershipTransferId());
             log.info("OTC_EXERCISE saga {} step 4 OK (ownership: {})", correlationId, ownership.ownershipTransferId());
 
             // Step 5: Azuriranje stanja — double check.
             saga.setCurrentStep(5);
-            if (compensationLog.size() != 4) {
+            if (!compensationLog.keySet().containsAll(java.util.List.of(
+                    "step1_reservationId",
+                    "step2_stocksReservationId",
+                    "step3_transferId",
+                    "step4_ownershipTransferId"))) {
                 throw new IllegalStateException("Step 5 inconsistency check failed; compensation log keys=" + compensationLog.keySet());
             }
             log.info("OTC_EXERCISE saga {} step 5 OK (final check)", correlationId);
@@ -138,7 +153,7 @@ public class OtcExerciseSaga {
         } catch (Exception ex) {
             log.error("OTC_EXERCISE saga {} failed in step {}: {}", correlationId, saga.getCurrentStep(), ex.toString());
             saga.setCompensationLog(compensationLog);
-            compensate(saga, compensationLog, correlationId, ex);
+            compensate(saga, compensationLog, exerciseCorrelationId, ex);
         }
     }
 

@@ -30,12 +30,16 @@ public class StockReservationService {
     public Reservation reserve(Long sellerId, String stockTicker, int amount, String correlationId) {
         Portfolio portfolio = findPortfolioByTicker(sellerId, stockTicker);
         int available = portfolio.getQuantity() - (portfolio.getReservedQuantity() == null ? 0 : portfolio.getReservedQuantity());
-        if (available < amount) {
+        int reserved = portfolio.getReservedQuantity() == null ? 0 : portfolio.getReservedQuantity();
+        boolean consumeExistingOtcReservation = isOtcExercise(correlationId) && reserved >= amount;
+        if (available < amount && !consumeExistingOtcReservation) {
             throw new IllegalStateException("Prodavac " + sellerId + " nema dovoljno slobodnih " + stockTicker
                     + " akcija: available=" + available + " requested=" + amount);
         }
-        portfolio.setReservedQuantity((portfolio.getReservedQuantity() == null ? 0 : portfolio.getReservedQuantity()) + amount);
-        portfolioRepository.save(portfolio);
+        if (!consumeExistingOtcReservation) {
+            portfolio.setReservedQuantity(reserved + amount);
+            portfolioRepository.save(portfolio);
+        }
 
         UUID reservationId = UUID.randomUUID();
         jdbcTemplate.update(
@@ -43,7 +47,8 @@ public class StockReservationService {
                         + "VALUES (?::uuid, ?, ?, ?, ?, ?, 'HELD')",
                 reservationId.toString(), correlationId, sellerId, portfolio.getListingId(), stockTicker, amount);
 
-        log.info("Stock reserved: seller={} ticker={} amount={} reservationId={}", sellerId, stockTicker, amount, reservationId);
+        log.info("Stock reserved: seller={} ticker={} amount={} reservationId={} consumedExistingOtcReservation={}",
+                sellerId, stockTicker, amount, reservationId, consumeExistingOtcReservation);
         return new Reservation(reservationId.toString(), "HELD");
     }
 
@@ -172,5 +177,9 @@ public class StockReservationService {
             } catch (Exception ignored) {}
         }
         throw new IllegalStateException("Korisnik " + userId + " nema portfolio poziciju za ticker " + ticker);
+    }
+
+    private boolean isOtcExercise(String correlationId) {
+        return correlationId != null && correlationId.startsWith("otc-exercise-");
     }
 }

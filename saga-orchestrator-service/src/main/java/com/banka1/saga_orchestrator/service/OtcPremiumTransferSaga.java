@@ -42,6 +42,7 @@ public class OtcPremiumTransferSaga {
     @Transactional
     public void run(Map<String, Object> event) {
         String correlationId = String.valueOf(event.get("contractId"));
+        String transferCorrelationId = "otc-premium-" + correlationId;
 
         SagaInstance existing = sagaRepo.findBySagaTypeAndCorrelationId(SagaType.OTC_PREMIUM_TRANSFER, correlationId).orElse(null);
         if (existing != null && existing.isFinalState()) {
@@ -70,7 +71,8 @@ public class OtcPremiumTransferSaga {
                     : market.convertCurrencyNoCommission(premiumUsd, premiumCurrency, "RSD");
             log.info("OTC premium: {} {} -> {} RSD (contractId={})", premiumUsd, premiumCurrency, transferAmount, correlationId);
 
-            BankingCoreClient.TransferResult result = banking.internalTransfer(buyerAccount, sellerAccount, transferAmount, correlationId);
+            BankingCoreClient.TransferResult result = banking.internalTransfer(
+                    buyerAccount, sellerAccount, transferAmount, transferCorrelationId);
 
             Map<String, Object> compensationLog = new LinkedHashMap<>();
             compensationLog.put("step1_transferId", result.transferId());

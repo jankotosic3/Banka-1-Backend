@@ -51,21 +51,45 @@ public class AccountServiceClient {
             String accountNumber, Long ownerId, String currency,
             String displayName, BigDecimal initialBalance) {
 
-        String token = currentBearerOrServiceToken();
         log.info("[account-service] createSystemAccount accountNumber={} ownerId={} currency={}",
                 accountNumber, ownerId, currency);
 
-        return webClient(token).post()
+        return webClient(jwtService.generateJwtToken()).post()
                 .uri("/internal/accounts/system")
                 .bodyValue(Map.of(
                         "accountNumber", accountNumber,
                         "ownerId", ownerId,
                         "currencyCode", currency,
-                        "accountConcrete", "FONDACIJA",
+                        "accountConcrete", "STANDARDNI",
                         "displayName", displayName,
                         "initialBalance", initialBalance != null ? initialBalance : BigDecimal.ZERO))
                 .retrieve()
                 .bodyToMono(CreatedSystemAccount.class)
+                .timeout(Duration.ofSeconds(10))
+                .block();
+    }
+
+    public void creditAccount(String accountNumber, BigDecimal amount, Long ownerId) {
+        log.info("[account-service] creditAccount accountNumber={} ownerId={} amount={}",
+                accountNumber, ownerId, amount);
+
+        webClient(jwtService.generateJwtToken()).post()
+                .uri("/internal/accounts/credit")
+                .bodyValue(Map.of(
+                        "accountNumber", accountNumber,
+                        "amount", amount,
+                        "clientId", ownerId))
+                .retrieve()
+                .toBodilessEntity()
+                .timeout(Duration.ofSeconds(10))
+                .block();
+    }
+
+    public AccountDetails getByNumber(String accountNumber) {
+        return webClient(currentBearerOrServiceToken()).get()
+                .uri("/internal/accounts/{accountNumber}/details", accountNumber)
+                .retrieve()
+                .bodyToMono(AccountDetails.class)
                 .timeout(Duration.ofSeconds(10))
                 .block();
     }
@@ -84,6 +108,11 @@ public class AccountServiceClient {
     }
 
     public record CreatedSystemAccount(
+            Long id, String accountNumber, Long ownerId, String currency,
+            BigDecimal availableBalance, String status, String accountType
+    ) {}
+
+    public record AccountDetails(
             Long id, String accountNumber, Long ownerId, String currency,
             BigDecimal availableBalance, String status, String accountType
     ) {}

@@ -69,7 +69,7 @@ public class ClientFundTransaction {
     private LocalDateTime occurredAt = LocalDateTime.now();
 
     /** Korisnikov tekuci racun sa kojeg ide ili na koji ide novac. */
-    @Column(name = "client_account_number", nullable = false, length = 16)
+    @Column(name = "client_account_number", nullable = false, length = 50)
     private String clientAccountNumber;
 
     @Column(length = 255)

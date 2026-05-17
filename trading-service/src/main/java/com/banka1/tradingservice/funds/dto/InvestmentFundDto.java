@@ -22,7 +22,10 @@ public class InvestmentFundDto {
     private String opis;
     private BigDecimal minimumContribution;
     private Long managerId;
+    private String managerIme;
+    private String managerPrezime;
     private BigDecimal likvidnaSredstva;
+    private Long accountId;
     private String accountNumber;
     private LocalDate datumKreiranja;
     /** Izvedeno: likvidnaSredstva + suma vrednosti hartija. */
