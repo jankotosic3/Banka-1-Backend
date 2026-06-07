@@ -27,17 +27,8 @@ type ListingFilter struct {
 	SettlementDateTo   *time.Time
 }
 
-// pgxPool is the subset of *pgxpool.Pool used by Repository. Declaring it as an
-// interface lets unit tests inject a mock pool; *pgxpool.Pool satisfies it.
-type pgxPool interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 type Repository struct {
-	db pgxPool
+	db *pgxpool.Pool
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {

@@ -15,11 +15,11 @@ import (
 type App struct {
 	Config         platform.Config
 	Logger         *slog.Logger
-	MarketRepo     ListingTypeResolver
+	MarketRepo     *market.Repository
 	FXRepo         *fx.Repository
-	MarketService  MarketServicePort
-	FXService      FXServicePort
-	PriceFeed      PriceFeedPort
+	MarketService  *market.Service
+	FXService      *fx.Service
+	PriceFeed      *market.PriceFeedService
 	EventPublisher platform.EventPublisher
 	schedulerClose func()
 }

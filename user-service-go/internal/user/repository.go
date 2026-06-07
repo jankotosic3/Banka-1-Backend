@@ -12,17 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// pgxPool is the subset of *pgxpool.Pool used by Repository. Declaring it as an
-// interface lets unit tests inject a mock pool; *pgxpool.Pool satisfies it.
-type pgxPool interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
 type Repository struct {
-	db   pgxPool
+	db   *pgxpool.Pool
 	jmbg *platform.JMBGCrypto
 }
 
@@ -502,7 +493,7 @@ func scanClient(row scanner) (Client, error) {
 	return client, mapNotFound(err)
 }
 
-func queryEmployees(ctx context.Context, db pgxPool, where string, args []any, page, size int) ([]Employee, int, error) {
+func queryEmployees(ctx context.Context, db *pgxpool.Pool, where string, args []any, page, size int) ([]Employee, int, error) {
 	var total int
 	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM employees WHERE deleted = false`+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -531,7 +522,7 @@ func queryEmployees(ctx context.Context, db pgxPool, where string, args []any, p
 	return employees, total, rows.Err()
 }
 
-func queryClients(ctx context.Context, db pgxPool, where string, args []any, page, size int) ([]Client, int, error) {
+func queryClients(ctx context.Context, db *pgxpool.Pool, where string, args []any, page, size int) ([]Client, int, error) {
 	var total int
 	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM clients WHERE deleted = false`+where, args...).Scan(&total); err != nil {
 		return nil, 0, err

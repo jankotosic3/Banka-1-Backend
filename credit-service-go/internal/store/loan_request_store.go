@@ -10,7 +10,7 @@ import (
 )
 
 type LoanRequestStore struct {
-	db pgxPool
+	db *pgxpool.Pool
 }
 
 func NewLoanRequestStore(db *pgxpool.Pool) *LoanRequestStore {
