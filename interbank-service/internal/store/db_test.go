@@ -286,6 +286,164 @@ func TestNewContractStore_Nil(t *testing.T) {
 	}
 }
 
+func TestContractStore_FindByIDForUpdate_UsesRowLock(t *testing.T) {
+	db := &fakeDB{row: &fakeRow{vals: contractRowVals()}}
+	s := &ContractStore{pool: db}
+	got, err := s.FindByIDForUpdate(context.Background(), "c-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != "c-1" {
+		t.Errorf("got %+v", got)
+	}
+	if !contains(db.lastSQL, "FOR UPDATE") {
+		t.Errorf("FindByIDForUpdate must take a row lock; SQL = %s", db.lastSQL)
+	}
+}
+
+func TestContractStore_ClaimExerciseByID(t *testing.T) {
+	// Won the claim: existed=1, claimed=1.
+	won := &fakeDB{row: &fakeRow{vals: []any{1, 1}}}
+	s := &ContractStore{pool: won}
+	exists, claimed, err := s.ClaimExerciseByID(context.Background(), "c-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || !claimed {
+		t.Errorf("expected exists+claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+	if !contains(won.lastSQL, "FOR UPDATE") {
+		t.Errorf("claim must lock the row; SQL = %s", won.lastSQL)
+	}
+	if !contains(won.lastSQL, "'EXERCISING'") || !contains(won.lastSQL, "'ACTIVE'") {
+		t.Errorf("claim must CAS ACTIVE→EXERCISING; SQL = %s", won.lastSQL)
+	}
+
+	// Exists but lost the CAS (already EXERCISING/EXERCISED): existed=1, claimed=0.
+	lost := &fakeDB{row: &fakeRow{vals: []any{1, 0}}}
+	exists, claimed, _ = (&ContractStore{pool: lost}).ClaimExerciseByID(context.Background(), "c-1")
+	if !exists || claimed {
+		t.Errorf("loser: expected exists+!claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+
+	// No such contract: existed=0, claimed=0.
+	missing := &fakeDB{row: &fakeRow{vals: []any{0, 0}}}
+	exists, claimed, _ = (&ContractStore{pool: missing}).ClaimExerciseByID(context.Background(), "nope")
+	if exists || claimed {
+		t.Errorf("missing: expected !exists+!claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+
+	// Scan error propagates.
+	boom := &fakeDB{row: &fakeRow{scanErr: errors.New("boom")}}
+	if _, _, err := (&ContractStore{pool: boom}).ClaimExerciseByID(context.Background(), "c-1"); err == nil {
+		t.Error("expected scan error to propagate")
+	}
+}
+
+func TestContractStore_ClaimExerciseByNegotiation(t *testing.T) {
+	// Won the claim: existed=1, claimed=1.
+	won := &fakeDB{row: &fakeRow{vals: []any{1, 1}}}
+	s := &ContractStore{pool: won}
+	exists, claimed, err := s.ClaimExerciseByNegotiation(context.Background(), "neg-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || !claimed {
+		t.Errorf("expected exists+claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+	if !contains(won.lastSQL, "FOR UPDATE") {
+		t.Errorf("claim must lock the row; SQL = %s", won.lastSQL)
+	}
+	// FIX: on the buyer-coordinator side the entry claim already flipped ACTIVE→EXERCISING,
+	// so the CAS must accept BOTH ACTIVE and EXERCISING — otherwise the buyer's stock-credit
+	// leg is skipped while the strike is still debited (paid, no shares).
+	if !contains(won.lastSQL, "'ACTIVE'") || !contains(won.lastSQL, "'EXERCISING'") {
+		t.Errorf("CAS must claim ACTIVE or EXERCISING → EXERCISED; SQL = %s", won.lastSQL)
+	}
+
+	// Exists but already EXERCISED/terminal: existed=1, claimed=0 → settlement skipped (idempotent).
+	lost := &fakeDB{row: &fakeRow{vals: []any{1, 0}}}
+	exists, claimed, _ = (&ContractStore{pool: lost}).ClaimExerciseByNegotiation(context.Background(), "neg-1")
+	if !exists || claimed {
+		t.Errorf("already-settled: expected exists+!claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+
+	// No matching contract: existed=0, claimed=0 → gate proceeds ungated.
+	missing := &fakeDB{row: &fakeRow{vals: []any{0, 0}}}
+	exists, claimed, _ = (&ContractStore{pool: missing}).ClaimExerciseByNegotiation(context.Background(), "nope")
+	if exists || claimed {
+		t.Errorf("missing: expected !exists+!claimed, got exists=%v claimed=%v", exists, claimed)
+	}
+
+	// Scan error propagates.
+	boom := &fakeDB{row: &fakeRow{scanErr: errors.New("boom")}}
+	if _, _, err := (&ContractStore{pool: boom}).ClaimExerciseByNegotiation(context.Background(), "neg-1"); err == nil {
+		t.Error("expected scan error to propagate")
+	}
+}
+
+func TestContractStore_RevertExercising(t *testing.T) {
+	db := &fakeDB{execTag: commandTag(1)}
+	s := &ContractStore{pool: db}
+	if err := s.RevertExercising(context.Background(), "c-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(db.lastSQL, "'ACTIVE'") || !contains(db.lastSQL, "status = 'EXERCISING'") {
+		t.Errorf("revert must only touch EXERCISING rows and set ACTIVE; SQL = %s", db.lastSQL)
+	}
+
+	// exec error propagates.
+	boom := &fakeDB{execErr: errors.New("boom")}
+	if err := (&ContractStore{pool: boom}).RevertExercising(context.Background(), "c-1"); err == nil {
+		t.Error("expected exec error to propagate")
+	}
+}
+
+func TestContractStore_ListForUser_ScopedAndAll(t *testing.T) {
+	// Scoped (non-admin): filters by buyer_id OR seller_id and binds the user id.
+	scoped := &fakeDB{rows: &fakeRows{rows: [][]any{contractRowVals(), contractRowVals()}}}
+	s := &ContractStore{pool: scoped}
+	out, err := s.ListForUser(context.Background(), "C-2", false)
+	if err != nil {
+		t.Fatalf("ListForUser scoped: %v", err)
+	}
+	if len(out) != 2 {
+		t.Errorf("expected 2 rows, got %d", len(out))
+	}
+	if len(scoped.lastArgs) != 1 || scoped.lastArgs[0] != "C-2" {
+		t.Errorf("expected user-id bound arg, got %v", scoped.lastArgs)
+	}
+	if !contains(scoped.lastSQL, "buyer_id = $1 OR seller_id = $1") {
+		t.Errorf("scoped query should filter by user, got: %s", scoped.lastSQL)
+	}
+
+	// Admin (includeAll): no user-id arg, no WHERE filter.
+	all := &fakeDB{rows: &fakeRows{rows: [][]any{contractRowVals()}}}
+	s2 := &ContractStore{pool: all}
+	out2, err := s2.ListForUser(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("ListForUser all: %v", err)
+	}
+	if len(out2) != 1 {
+		t.Errorf("expected 1 row, got %d", len(out2))
+	}
+	if len(all.lastArgs) != 0 {
+		t.Errorf("admin list should bind no args, got %v", all.lastArgs)
+	}
+}
+
+// contains is a tiny substring helper (avoids importing strings just for tests).
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (func() bool {
+		for i := 0; i+len(needle) <= len(haystack); i++ {
+			if haystack[i:i+len(needle)] == needle {
+				return true
+			}
+		}
+		return false
+	})()
+}
+
 // ---------------------------------------------------------------------------
 // MessageStore
 // ---------------------------------------------------------------------------

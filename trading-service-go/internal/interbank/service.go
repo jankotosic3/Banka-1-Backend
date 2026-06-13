@@ -13,6 +13,7 @@ import (
 	"banka1/trading-service-go/internal/portfolio"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
 // Service exposes the interbank 2PC stock primitives + the option lifecycle +
@@ -84,6 +85,84 @@ func (s *Service) ReleaseStock(ctx context.Context, reservationID string) error 
 	return s.runTx(ctx, func(tx pgx.Tx) error {
 		return s.releaseStockTx(ctx, tx, reservationID)
 	})
+}
+
+// CreditStock credits `quantity` of `ticker` shares to the local buyer's portfolio
+// (FIX 1: asset-conservation on a cross-bank OTC option exercise). On the exercise
+// 2PC our buyer pays the strike (legs a/b, reserved+committed via banking-core) and
+// the partner-side seller delivers the shares (legs c/d). The buyer's incoming STOCK
+// credit (leg d) has no raw-posting path on our side, so interbank-service routes it
+// here on commit: without this the cash was debited but the shares never landed.
+//
+// The ticker is resolved to its listing id via market-service (the buyer may hold no
+// prior position for it, so we cannot key off an existing portfolio row). The buyer
+// position is upserted as a new lot at the listing's current price (falling back to
+// the strike when the market price is unavailable), mirroring TransferOwnership's
+// buyer-side merge. One transaction.
+//
+// Idempotency note: interbank-service only invokes this once per committed tx —
+// Executor.CommitLocal flips the transaction to COMMITTED after running every ref and
+// short-circuits on a re-commit, and the retry scheduler re-sends the COMMIT only to
+// the partner, never re-running our local refs. So no extra dedup table is needed.
+func (s *Service) CreditStock(ctx context.Context, buyerUserID int64, ticker string, quantity, transactionIDRouting int, transactionIDLocal string, strikePrice decimal.Decimal) error {
+	if quantity <= 0 {
+		return api.NewOtcError(http.StatusNotFound, "Quantity must be positive: "+itoa(int64(quantity)))
+	}
+	if strings.TrimSpace(ticker) == "" {
+		return api.NewOtcError(http.StatusNotFound, "Ticker must not be blank")
+	}
+
+	listing, err := s.market.ResolveStockListing(ctx, ticker)
+	if err != nil {
+		return err
+	}
+	if listing == nil {
+		return api.NewOtcError(http.StatusNotFound, "No STOCK listing found for ticker "+ticker)
+	}
+	// Average purchase price for the new lot: prefer the listing's current price; fall
+	// back to the contract strike when the market price is missing or non-positive.
+	avg := listing.Price
+	if avg.Sign() <= 0 {
+		avg = strikePrice
+	}
+
+	return s.runTx(ctx, func(tx pgx.Tx) error {
+		existing, err := s.portfolio.FindByUserIDAndListingIDForUpdate(ctx, tx, buyerUserID, listing.ListingID)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			if err := s.portfolio.Insert(ctx, tx, buyerUserID, listing.ListingID, "STOCK", quantity, avg); err != nil {
+				return err
+			}
+			s.logger.Info("interbank creditStock (new lot)", "buyer", buyerUserID, "ticker", ticker,
+				"qty", quantity, "listing", listing.ListingID, "avg", avg.String(),
+				"txRouting", transactionIDRouting, "txLocal", transactionIDLocal)
+			return nil
+		}
+		// Merge into the existing lot at a quantity-weighted average price.
+		newQty := existing.Quantity + quantity
+		mergedAvg := weightedAvg(existing.Quantity, existing.AveragePurchasePrice, quantity, avg)
+		if err := s.portfolio.UpdateQuantityAndAvg(ctx, tx, existing.ID, newQty, mergedAvg); err != nil {
+			return err
+		}
+		s.logger.Info("interbank creditStock (merge)", "buyer", buyerUserID, "ticker", ticker,
+			"qty", quantity, "listing", listing.ListingID, "newQty", newQty, "avg", mergedAvg.String(),
+			"txRouting", transactionIDRouting, "txLocal", transactionIDLocal)
+		return nil
+	})
+}
+
+// weightedAvg computes the quantity-weighted average price when merging an incoming
+// lot (qtyB @ priceB) into an existing position (qtyA @ priceA). Degenerates to
+// priceB when the combined quantity is non-positive (defensive; should not happen).
+func weightedAvg(qtyA int, priceA decimal.Decimal, qtyB int, priceB decimal.Decimal) decimal.Decimal {
+	total := qtyA + qtyB
+	if total <= 0 {
+		return priceB
+	}
+	sum := priceA.Mul(decimal.NewFromInt(int64(qtyA))).Add(priceB.Mul(decimal.NewFromInt(int64(qtyB))))
+	return sum.Div(decimal.NewFromInt(int64(total)))
 }
 
 // reserveStockTx is the core reserve logic, run inside a caller-owned tx so the

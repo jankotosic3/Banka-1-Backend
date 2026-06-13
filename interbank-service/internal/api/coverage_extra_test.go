@@ -406,7 +406,7 @@ func fullTestDeps() ServerDeps {
 			Routing:      testTheirRouting,
 			InboundToken: testApiKey,
 		}}},
-		InboundHandler: NewInboundHandler(&fakeInboundExecutor{prepareVote: protocol.TransactionVote{Vote: protocol.VoteYes}}, newFakeInboundMessageStore(), nil),
+		InboundHandler: NewInboundHandler(&fakeInboundExecutor{prepareVote: protocol.TransactionVote{Vote: protocol.VoteYes}}, newFakeInboundMessageStore(), nil, nil),
 		OtcHandler:     NewOtcHandler(&fakeOtcService{}, nil),
 		PublicStock:    NewPublicStockHandler(&fakePublicStockService{}, nil),
 		UserDisplay:    NewUserDisplayHandler(testMyRouting, "Banka 1", &fakeUserResolver{info: &UserDisplayInfo{DisplayName: "X"}}, nil),

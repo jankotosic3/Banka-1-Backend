@@ -659,12 +659,16 @@ SELECT 1, 5, 'LIMIT', 3, 1, 245.00, 245.00, NULL, 'BUY', 'PENDING',
 WHERE NOT EXISTS (SELECT 1 FROM orders WHERE user_id=1 AND listing_id=5 AND status='PENDING');
 
 -- Futures + Forex orders for user 1 / account 18 (so "Moji nalozi" shows non-stock orders)
-INSERT INTO orders (user_id,account_id,listing_id,order_type,direction,status,quantity,contract_size,price_per_unit,remaining_portions,is_done,all_or_none,margin,after_hours,last_modification,created_at,executed_at)
+-- NOTE: created_at/executed_at are intentionally NOT seeded here. Those columns are
+-- added later by migration 004_order_timestamps.sql, which backfills created_at from
+-- last_modification and executed_at from last_modification for DONE orders. Seeding them
+-- here would reference columns that do not exist yet at migration 002.
+INSERT INTO orders (user_id,account_id,listing_id,order_type,direction,status,quantity,contract_size,price_per_unit,remaining_portions,is_done,all_or_none,margin,after_hours,last_modification)
 SELECT v.* FROM (VALUES
- (1,18,101,'MARKET','BUY','DONE',100,1,117.20,0,true,false,false,false, now(),now(),now()),
- (1,18,102,'LIMIT','SELL','DONE',50,1,108.50,0,true,false,false,false, now(),now(),now()),
- (1,18,103,'MARKET','BUY','DONE',200,1,1.08,0,true,false,false,false, now(),now(),now()),
- (1,18,201,'MARKET','BUY','DONE',2,5000,620.00,0,true,false,false,false, now(),now(),now()),
- (1,18,202,'LIMIT','BUY','APPROVED',1,1000,78.50,1,false,false,false,false, now(),now(),null)
-) AS v(user_id,account_id,listing_id,order_type,direction,status,quantity,contract_size,price_per_unit,remaining_portions,is_done,all_or_none,margin,after_hours,last_modification,created_at,executed_at)
+ (1,18,101,'MARKET','BUY','DONE',100,1,117.20,0,true,false,false,false, now()),
+ (1,18,102,'LIMIT','SELL','DONE',50,1,108.50,0,true,false,false,false, now()),
+ (1,18,103,'MARKET','BUY','DONE',200,1,1.08,0,true,false,false,false, now()),
+ (1,18,201,'MARKET','BUY','DONE',2,5000,620.00,0,true,false,false,false, now()),
+ (1,18,202,'LIMIT','BUY','APPROVED',1,1000,78.50,1,false,false,false,false, now())
+) AS v(user_id,account_id,listing_id,order_type,direction,status,quantity,contract_size,price_per_unit,remaining_portions,is_done,all_or_none,margin,after_hours,last_modification)
 WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id=v.user_id AND o.listing_id=v.listing_id AND o.order_type=v.order_type);

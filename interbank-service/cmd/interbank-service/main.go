@@ -158,7 +158,10 @@ func run() error {
 	// NegotiationStore → OptionNegotiationLookup adapter.
 	// NewNegotiationSellerLookup is provided by the service package; it also
 	// implements NegotiationReader for Validator use (used inside NewExecutor).
-	negLookup := service.NewNegotiationSellerLookup(negStore)
+	// The contract store is wired in so the Validator can tell an exercisable accepted
+	// option (closed negotiation + ACTIVE contract) apart from a dead one — without it,
+	// every accepted cross-bank option would fail its exercise 2PC with OPTION_USED_OR_EXPIRED.
+	negLookup := service.NewNegotiationSellerLookupWithContracts(negStore, contractStore)
 
 	executor := service.NewExecutor(
 		cfg.Interbank.MyRoutingNumber,
@@ -168,6 +171,11 @@ func run() error {
 		negLookup,
 		logger,
 	)
+	// FIX B — per-contract exercise idempotency: gate the (non-idempotent) exercise
+	// settlement legs (seller strike CreditMonas, buyer CreditStock) on the contract status
+	// so a retry with a NEW txId for an already-EXERCISED contract is a no-op (no double
+	// credit). The claim is an atomic ACTIVE→EXERCISED CAS on interbank_contracts.
+	executor.SetContractGate(&contractGateAdapter{contractStore})
 
 	// -------------------------------------------------------------------------
 	// OTC negotiation service — needs a CoordinatorIface.
@@ -184,14 +192,20 @@ func run() error {
 		logger,
 	)
 
-	// Coordinator uses BankingCoreClient for MONAS account resolution.
+	// Coordinator uses BankingCoreClient for MONAS account resolution. The
+	// sellerNegResolver maps a buyer-side contract's LOCAL negotiation id to the
+	// SELLER bank's authoritative id (the option pseudo-account key on exercise);
+	// bcReserver doubles as the off-wire buyer-strike reserver (LocalMonasReserver).
+	sellerNegResolver := &sellerNegAdapter{negStore}
 	coordinator := service.NewCoordinator(
 		cfg.Interbank.MyRoutingNumber,
 		executor,
 		outboundClient,
 		negStore,
-		contractStore, // *store.ContractStore satisfies service.ContractStoreIface
-		bcReserver,    // satisfies service.BankingCoreAccountResolver
+		contractStore,     // *store.ContractStore satisfies service.ContractStoreIface
+		bcReserver,        // satisfies service.BankingCoreAccountResolver
+		sellerNegResolver, // satisfies service.SellerNegResolver
+		bcReserver,        // satisfies service.LocalMonasReserver (Reserve/Commit/ReleaseMonas)
 		logger,
 	)
 	// Fill shim now that coordinator is ready.
@@ -202,7 +216,7 @@ func run() error {
 	// -------------------------------------------------------------------------
 	otcOutbound := service.NewOtcOutboundService(
 		cfg.Interbank.MyRoutingNumber,
-		negStore,      // satisfies NegotiationStoreForOutbound
+		negStore, // satisfies NegotiationStoreForOutbound
 		outboundClient,
 		otcSvc,
 		registry, // satisfies service.PartnerNameResolver
@@ -210,9 +224,32 @@ func run() error {
 	)
 
 	// -------------------------------------------------------------------------
+	// OTC contracts service (FE-facing buyer-side option contracts) — list +
+	// exercise. The exerciser is the same Coordinator used by OTC accept/payment.
+	// -------------------------------------------------------------------------
+	otcContracts := service.NewOtcContractsService(
+		cfg.Interbank.MyRoutingNumber,
+		contractStore, // *store.ContractStore satisfies ContractStoreForService
+		coordinator,   // *service.Coordinator satisfies service.ContractExerciser
+		logger,
+	)
+
+	// BuyerContractRecorder records the buyer's local option contract on a
+	// successful inbound COMMIT_TX (cross-bank OTC option buy). It reads back the
+	// committed tx postings, maps the partner negotiation id → our local mirror,
+	// and inserts an ACTIVE contract (idempotent).
+	buyerContractRecorder := service.NewBuyerContractRecorder(
+		cfg.Interbank.MyRoutingNumber,
+		execStore,     // *txStoreAdapter satisfies RecorderExecutorStore (FindTx)
+		contractStore, // satisfies RecorderContractStore
+		negStore,      // satisfies RecorderNegotiationStore
+		logger,
+	)
+
+	// -------------------------------------------------------------------------
 	// API handlers
 	// -------------------------------------------------------------------------
-	inboundHandler := api.NewInboundHandler(executor, msgStore, logger)
+	inboundHandler := api.NewInboundHandler(executor, msgStore, buyerContractRecorder, logger)
 	otcHandler := api.NewOtcHandler(otcSvc, logger)
 
 	// PublicStockHandler needs a PublicStockService; TradingClient satisfies it
@@ -229,18 +266,26 @@ func run() error {
 	)
 
 	otcOutboundHandler := api.NewOtcOutboundHandler(otcOutbound, logger)
+	otcContractsHandler := api.NewOtcContractsHandler(otcContracts, logger)
+
+	// PaymentHandler reuses the same Coordinator instance as OTC accept; it
+	// validates the sender account via banking-core (bcReserver satisfies
+	// service.BankingCoreReader) before running the outbound payment 2PC.
+	paymentHandler := api.NewPaymentHandler(coordinator, bcReserver, logger)
 
 	// -------------------------------------------------------------------------
 	// HTTP router
 	// -------------------------------------------------------------------------
 	deps := api.ServerDeps{
-		Partners:        registry, // satisfies auth.PartnerStore
-		InboundHandler:  inboundHandler,
-		OtcHandler:      otcHandler,
-		PublicStock:     pubStockHandler,
-		UserDisplay:     userDisplayHandler,
-		OtcOutbound:     otcOutboundHandler,
-		JWTSecret:       cfg.JWT.Secret,
+		Partners:       registry, // satisfies auth.PartnerStore
+		InboundHandler: inboundHandler,
+		OtcHandler:     otcHandler,
+		PublicStock:    pubStockHandler,
+		UserDisplay:    userDisplayHandler,
+		OtcOutbound:    otcOutboundHandler,
+		OtcContracts:   otcContractsHandler,
+		Payments:       paymentHandler,
+		JWTSecret:      cfg.JWT.Secret,
 	}
 	router := api.NewRouter(deps)
 
@@ -438,6 +483,46 @@ func (a *txStoreAdapter) UpdateTxStatus(ctx context.Context, routing int, id, st
 }
 
 // ---------------------------------------------------------------------------
+// contractGateAdapter — adapts *store.ContractStore to service.ContractGate
+// ---------------------------------------------------------------------------
+
+// contractGateAdapter bridges the per-contract exercise idempotency gate (FIX B) to the
+// contract store's atomic ACTIVE→EXERCISED claim. The method names differ only to keep the
+// service-side interface name short.
+type contractGateAdapter struct{ s *store.ContractStore }
+
+func (a *contractGateAdapter) ClaimExercise(ctx context.Context, negotiationID string) (bool, bool, error) {
+	return a.s.ClaimExerciseByNegotiation(ctx, negotiationID)
+}
+
+func (a *contractGateAdapter) ReleaseClaim(ctx context.Context, negotiationID string) error {
+	return a.s.ReleaseExerciseClaimByNegotiation(ctx, negotiationID)
+}
+
+// ---------------------------------------------------------------------------
+// sellerNegAdapter — adapts *store.NegotiationStore to service.SellerNegResolver
+// ---------------------------------------------------------------------------
+
+// sellerNegAdapter maps a buyer-side contract's LOCAL negotiation id to the SELLER
+// bank's AUTHORITATIVE negotiation id (the option pseudo-account key on a cross-bank
+// exercise). It reads our mirror negotiation row: when we are NOT authoritative we hold
+// a non-authoritative mirror whose remote_negotiation_id is the seller-bank id. When we
+// ARE authoritative (the option was issued here) there is no remote id; returning ""
+// makes the Coordinator fall back to the local id (correct — we host the pseudo-account).
+type sellerNegAdapter struct{ s *store.NegotiationStore }
+
+func (a *sellerNegAdapter) SellerNegotiationID(ctx context.Context, localNegotiationID string) string {
+	neg, err := a.s.FindByID(ctx, localNegotiationID)
+	if err != nil || neg == nil {
+		return ""
+	}
+	if neg.RemoteNegotiationID != nil && *neg.RemoteNegotiationID != "" {
+		return *neg.RemoteNegotiationID
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------------------
 // bcAdapter — adapts *client.BankingCoreClient to service.BankingCoreReserver
 // ---------------------------------------------------------------------------
 
@@ -471,8 +556,16 @@ func (a *bcAdapter) CommitMonas(ctx context.Context, reservationID string) error
 	return a.c.CommitMonas(ctx, reservationID)
 }
 
+func (a *bcAdapter) CreditMonas(ctx context.Context, accountNum string, amount decimal.Decimal, clientID int64) error {
+	return a.c.CreditMonas(ctx, accountNum, amount, clientID)
+}
+
 func (a *bcAdapter) ReleaseMonas(ctx context.Context, reservationID string) error {
 	return a.c.ReleaseMonas(ctx, reservationID)
+}
+
+func (a *bcAdapter) RecordInterbankPayment(ctx context.Context, orderNumber, fromAccount, toAccount string, amount decimal.Decimal, currency, recipientName, paymentPurpose string) error {
+	return a.c.RecordInterbankPayment(ctx, orderNumber, fromAccount, toAccount, amount, currency, recipientName, paymentPurpose)
 }
 
 // ---------------------------------------------------------------------------

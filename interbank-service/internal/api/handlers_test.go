@@ -214,7 +214,7 @@ func TestUserDisplay_NoAuth_401(t *testing.T) {
 func TestHealthEndpoint(t *testing.T) {
 	deps := ServerDeps{
 		Partners:       &staticPartnerStore{},
-		InboundHandler: NewInboundHandler(&fakeInboundExecutor{}, newFakeInboundMessageStore(), nil),
+		InboundHandler: NewInboundHandler(&fakeInboundExecutor{}, newFakeInboundMessageStore(), nil, nil),
 		OtcHandler:     NewOtcHandler(&fakeOtcService{}, nil),
 		PublicStock:    NewPublicStockHandler(&fakePublicStockService{}, nil),
 		UserDisplay:    NewUserDisplayHandler(testMyRouting, "Banka 1", &fakeUserResolver{}, nil),

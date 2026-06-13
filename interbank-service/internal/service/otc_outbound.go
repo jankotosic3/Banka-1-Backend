@@ -454,6 +454,17 @@ func (s *OtcOutboundService) AcceptOutbound(
 			"id", id, "partnerRouting", partnerRouting, "status", statusCode, "err", clientErr)
 		return mapOutboundErrorStatus(clientErr), nil
 	}
+	// FIX 2: on partner success the negotiation is settled — close our local mirror so
+	// it leaves the active feed and the FE no longer offers "Prihvati". Without this the
+	// mirror's is_ongoing stayed true and a second accept click hit the partner's now-
+	// closed negotiation → 409. The authoritative branch already closes via the
+	// coordinator; only the mirror path was leaking. Non-fatal: a close failure is logged.
+	if statusCode >= 200 && statusCode < 300 && n.IsOngoing {
+		if closeErr := s.store.MarkClosed(ctx, n.ID); closeErr != nil {
+			s.log.WarnContext(ctx, "accept outbound: MarkClosed mirror failed (non-fatal)",
+				"id", n.ID, "err", closeErr)
+		}
+	}
 	s.log.InfoContext(ctx, "accept outbound partner returned", "id", id, "status", statusCode)
 	return statusCode, nil
 }

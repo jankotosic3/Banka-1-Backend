@@ -224,6 +224,7 @@ func registerRoutes(handle func(method, path string, handler http.Handler), app 
 	// errors → OTC 404/409 shape via writeDomainError. {id} is the reservation UUID;
 	// {negotiationId} is the option negotiation key (string).
 	handle(http.MethodPost, "/internal/interbank/reserve-stock", orderSecured(jwtService, serviceOnly, handlers.InterbankReserveStock))
+	handle(http.MethodPost, "/internal/interbank/credit-stock", orderSecured(jwtService, serviceOnly, handlers.InterbankCreditStock))
 	handle(http.MethodPost, "/internal/interbank/reservations/{id}/commit-stock", orderSecured(jwtService, serviceOnly, handlers.InterbankCommitStock))
 	handle(http.MethodDelete, "/internal/interbank/reservations/{id}", orderSecured(jwtService, serviceOnly, handlers.InterbankReleaseStock))
 	handle(http.MethodPost, "/internal/interbank/options/{negotiationId}/reserve", orderSecured(jwtService, serviceOnly, handlers.InterbankReserveOption))

@@ -1,5 +1,7 @@
 package interbank
 
+import "github.com/shopspring/decimal"
+
 // These are the request/response DTOs for the /internal/interbank* endpoints.
 // JSON tags match the Java controller record field names exactly — interbank-
 // service's TradingInternalClient depends on them being byte-compatible.
@@ -21,6 +23,21 @@ type ReserveStockReq struct {
 // lowercase string, which is exactly what newUUIDv4 produces.
 type ReserveStockRes struct {
 	ReservationID string `json:"reservationId"`
+}
+
+// CreditStockReq is the body of POST /internal/interbank/credit-stock (FIX 1):
+// interbank-service posts it on the COMMIT of a cross-bank OTC option exercise so the
+// local buyer is credited the shares delivered by the partner-side seller. buyerUserId
+// is the local owner id (the "C-N" prefix already stripped by interbank-service);
+// strikePrice is the fallback average purchase price when market-service has no live
+// price for the ticker.
+type CreditStockReq struct {
+	BuyerUserID          int64           `json:"buyerUserId"`
+	Ticker               string          `json:"ticker"`
+	Quantity             int             `json:"quantity"`
+	TransactionIDRouting int             `json:"transactionIdRouting"`
+	TransactionIDLocal   string          `json:"transactionIdLocal"`
+	StrikePrice          decimal.Decimal `json:"strikePrice"`
 }
 
 // ReserveOptionReq mirrors InterbankOptionController.ReserveOptionReq.

@@ -28,6 +28,14 @@ type InboundMessageStore interface {
 	Insert(ctx context.Context, m *store.Message) error
 }
 
+// BuyerContractRecorder records the buyer's local option contract after a
+// successful inbound COMMIT_TX (cross-bank OTC option buy). Optional — when nil,
+// the inbound path behaves exactly as before. Implemented by
+// *service.BuyerContractRecorder.
+type BuyerContractRecorder interface {
+	RecordOnCommit(ctx context.Context, txID protocol.ForeignBankId)
+}
+
 // ---------------------------------------------------------------------------
 // InboundHandler
 // ---------------------------------------------------------------------------
@@ -37,15 +45,18 @@ type InboundMessageStore interface {
 type InboundHandler struct {
 	executor InboundExecutor
 	messages InboundMessageStore
+	recorder BuyerContractRecorder // optional — records buyer-side option contracts on commit
 	log      *slog.Logger
 }
 
-// NewInboundHandler constructs the handler.
-func NewInboundHandler(executor InboundExecutor, messages InboundMessageStore, log *slog.Logger) *InboundHandler {
+// NewInboundHandler constructs the handler. recorder may be nil; when set, it is
+// invoked after a successful inbound COMMIT_TX to record the buyer's local
+// option contract for a cross-bank OTC option buy.
+func NewInboundHandler(executor InboundExecutor, messages InboundMessageStore, recorder BuyerContractRecorder, log *slog.Logger) *InboundHandler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &InboundHandler{executor: executor, messages: messages, log: log}
+	return &InboundHandler{executor: executor, messages: messages, recorder: recorder, log: log}
 }
 
 // PostMessage handles POST /interbank.
@@ -166,6 +177,15 @@ func (h *InboundHandler) handleCommitTx(w http.ResponseWriter, r *http.Request, 
 	if err := h.executor.CommitLocal(r.Context(), body.TransactionId); err != nil {
 		h.persistAndReturnError(w, r.Context(), msg, senderRouting, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Buyer-side option contract recording: when this committed tx carried an
+	// option receipt for one of our persons (we BOUGHT a cross-bank option),
+	// record a local ACTIVE contract so the buyer can see/exercise it. Best-effort
+	// and idempotent — the 2PC commit has already succeeded, so a recording
+	// failure must not turn this COMMIT_TX into a 5xx.
+	if h.recorder != nil {
+		h.recorder.RecordOnCommit(r.Context(), body.TransactionId)
 	}
 
 	h.persistCache(r.Context(), msg, senderRouting, http.StatusNoContent, "")

@@ -344,14 +344,33 @@ func generateNegotiationID() string {
 	return "neg-" + hex.EncodeToString(b)
 }
 
+// ContractByNegotiationReader is the minimal contract-store seam the seller lookup needs to
+// resolve a negotiation id → its option contract lifecycle (status + settlement). Satisfied
+// by *store.ContractStore; tests use a fake. It is optional: a nil reader degrades to the
+// pre-exercise behaviour (contract fields left empty → only accept-time legs pass).
+type ContractByNegotiationReader interface {
+	FindByNegotiationID(ctx context.Context, negotiationID string) (*store.Contract, error)
+}
+
 // NegotiationSellerLookup adapts NegotiationStoreIface to the OptionNegotiationLookup
-// interface required by Executor. It resolves a negotiation id → seller foreign id string.
+// interface required by Executor. It resolves a negotiation id → seller foreign id string,
+// and (for the Validator's NegotiationReader role) enriches the negotiation view with the
+// backing option contract's lifecycle so EXERCISE-time legs on a closed negotiation pass.
 type NegotiationSellerLookup struct {
-	store NegotiationStoreIface
+	store     NegotiationStoreIface
+	contracts ContractByNegotiationReader // optional — nil is tolerated
 }
 
 func NewNegotiationSellerLookup(s NegotiationStoreIface) *NegotiationSellerLookup {
 	return &NegotiationSellerLookup{store: s}
+}
+
+// NewNegotiationSellerLookupWithContracts wires the contract store so the Validator can tell
+// an exercisable accepted option (closed negotiation + ACTIVE contract) apart from a
+// genuinely dead one. Used by production wiring; the plain constructor stays for callers
+// that only need seller resolution.
+func NewNegotiationSellerLookupWithContracts(s NegotiationStoreIface, c ContractByNegotiationReader) *NegotiationSellerLookup {
+	return &NegotiationSellerLookup{store: s, contracts: c}
 }
 
 // FindSellerID returns the seller's foreign-id string (e.g. "C-15") for the given negotiation id.
@@ -367,6 +386,12 @@ func (l *NegotiationSellerLookup) FindSellerID(ctx context.Context, negID string
 }
 
 // FindNegotiation adapts to service.NegotiationReader for Validator use.
+//
+// It additionally resolves the backing option contract (when a contract store is wired) so
+// the Validator can distinguish an EXERCISE of an accepted option (closed negotiation but
+// ACTIVE contract) from a genuinely dead negotiation. The contract lookup is best-effort:
+// any error is swallowed and the contract fields are left empty — the validator then falls
+// back to accept-time semantics, which is the safe (more-restrictive) default.
 func (l *NegotiationSellerLookup) FindNegotiation(ctx context.Context, id protocol.ForeignBankId) (*NegotiationLite, error) {
 	neg, err := l.store.FindByAuthoritativeRef(ctx, id.RoutingNumber, id.Id)
 	if err != nil {
@@ -375,12 +400,20 @@ func (l *NegotiationSellerLookup) FindNegotiation(ctx context.Context, id protoc
 	if neg == nil {
 		return nil, fmt.Errorf("%w: %v", ErrNegotiationNotFound, id)
 	}
-	return &NegotiationLite{
+	lite := &NegotiationLite{
 		IsOngoing:      neg.IsOngoing,
 		SettlementDate: neg.SettlementDate,
 		Amount:         neg.Amount,
 		PricePerUnit:   neg.PriceAmount,
-	}, nil
+	}
+	if l.contracts != nil {
+		// neg.ID is OUR local negotiation id; interbank_contracts.negotiation_id references it.
+		if c, cerr := l.contracts.FindByNegotiationID(ctx, neg.ID); cerr == nil && c != nil {
+			lite.ContractStatus = c.Status
+			lite.ContractSettlement = c.SettlementDate
+		}
+	}
+	return lite, nil
 }
 
 // ensure NegotiationSellerLookup implements OptionNegotiationLookup and NegotiationReader

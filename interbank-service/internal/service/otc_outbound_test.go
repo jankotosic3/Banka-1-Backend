@@ -449,6 +449,69 @@ func TestAcceptOutbound_Mirror(t *testing.T) {
 	}
 }
 
+// FIX 2: a successful mirror accept must close the local mirror row so it leaves the
+// active feed and a second accept cannot fire (which would hit the partner's now-closed
+// negotiation → 409).
+func TestAcceptOutbound_Mirror_ClosesLocalMirror(t *testing.T) {
+	ns := newFakeOutboundNegStore()
+	remoteID := "neg-partner-acc2"
+	ns.rows["neg-acc2"] = &store.Negotiation{
+		ID:                    "neg-acc2",
+		BuyerRouting:          testOutboundMyRouting,
+		BuyerID:               "C-15",
+		SellerRouting:         testOutboundPartnerRN,
+		SellerID:              "C-2",
+		IsOngoing:             true,
+		IsAuthoritative:       false,
+		RemoteNegotiationID:   &remoteID,
+		LastModifiedByRouting: testOutboundPartnerRN,
+		LastModifiedByID:      "C-2",
+		SettlementDate:        time.Now().Add(48 * time.Hour),
+	}
+
+	client := &fakeOtcOutboundClient{acceptStatus: 204}
+	svc := newOutboundSvc(ns, client)
+
+	if _, err := svc.AcceptOutbound(context.Background(), "neg-acc2"); err != nil {
+		t.Fatalf("AcceptOutbound error: %v", err)
+	}
+	row, _ := ns.FindByID(context.Background(), "neg-acc2")
+	if row == nil || row.IsOngoing {
+		t.Fatalf("expected mirror closed (is_ongoing=false) after successful accept, got %+v", row)
+	}
+}
+
+// FIX 2 guard: a non-2xx partner accept must NOT close the local mirror (the
+// negotiation is still open and the user may retry once the partner recovers).
+func TestAcceptOutbound_Mirror_DoesNotCloseOnNon2xx(t *testing.T) {
+	ns := newFakeOutboundNegStore()
+	remoteID := "neg-partner-acc3"
+	ns.rows["neg-acc3"] = &store.Negotiation{
+		ID:                    "neg-acc3",
+		BuyerRouting:          testOutboundMyRouting,
+		BuyerID:               "C-15",
+		SellerRouting:         testOutboundPartnerRN,
+		SellerID:              "C-2",
+		IsOngoing:             true,
+		IsAuthoritative:       false,
+		RemoteNegotiationID:   &remoteID,
+		LastModifiedByRouting: testOutboundPartnerRN,
+		LastModifiedByID:      "C-2",
+		SettlementDate:        time.Now().Add(48 * time.Hour),
+	}
+
+	client := &fakeOtcOutboundClient{acceptStatus: 409}
+	svc := newOutboundSvc(ns, client)
+
+	if _, err := svc.AcceptOutbound(context.Background(), "neg-acc3"); err != nil {
+		t.Fatalf("AcceptOutbound error: %v", err)
+	}
+	row, _ := ns.FindByID(context.Background(), "neg-acc3")
+	if row == nil || !row.IsOngoing {
+		t.Fatalf("expected mirror to stay open after non-2xx accept, got %+v", row)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestDeleteOutbound_Idempotent — DELETE non-existent: no error
 // ---------------------------------------------------------------------------

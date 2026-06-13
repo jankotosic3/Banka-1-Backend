@@ -111,6 +111,8 @@ spec:
               value: "0.70"
             - name: EXCHANGE_RATES_FETCH_CRON
               value: "0 0 8 * * *"
+            - name: STOCK_INFLUX_ENABLED
+              value: "true"
             - name: STOCK_INFLUX_URL
               value: http://influxdb:8086
             - name: STOCK_INFLUX_ORG

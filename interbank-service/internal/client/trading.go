@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/raf-si-2025/banka-1-go/interbank-service/internal/protocol"
 	"github.com/raf-si-2025/banka-1-go/shared/auth"
 )
@@ -86,6 +88,21 @@ func (c *TradingClient) ReserveStock(ctx context.Context, sellerUserID int64, ti
 		return "", err
 	}
 	return resp.ReservationID, nil
+}
+
+// CreditStock credits an incoming stock delivery to a LOCAL buyer's portfolio (the
+// buyer-side STOCK leg of a cross-bank OTC option exercise). Idempotency is provided by
+// the 2PC commit being single-shot per local tx. Returns nil on 204 (FIX 1).
+func (c *TradingClient) CreditStock(ctx context.Context, buyerUserID int64, ticker string, quantity int, txIDRouting int, txIDLocal string, strike decimal.Decimal) error {
+	body := map[string]any{
+		"buyerUserId":          buyerUserID,
+		"ticker":               ticker,
+		"quantity":             quantity,
+		"transactionIdRouting": txIDRouting,
+		"transactionIdLocal":   txIDLocal,
+		"strikePrice":          strike,
+	}
+	return c.do(ctx, http.MethodPost, c.baseURL+"/internal/interbank/credit-stock", body, nil)
 }
 
 // CommitStock permanently transfers the reserved stock. Returns nil on 204.

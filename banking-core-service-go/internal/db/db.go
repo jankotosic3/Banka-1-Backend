@@ -336,13 +336,16 @@ CREATE TABLE IF NOT EXISTS interbank_reservations (
     reservation_id UUID NOT NULL UNIQUE,
     transaction_id_routing INT NOT NULL,
     transaction_id_local VARCHAR(64) NOT NULL,
-    account_number VARCHAR(18) NOT NULL,
+    account_number VARCHAR(32) NOT NULL,
     currency VARCHAR(8) NOT NULL,
     amount NUMERIC(20,4) NOT NULL CHECK (amount > 0),
     status VARCHAR(16) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     finalized_at TIMESTAMP WITH TIME ZONE
 );
+-- Self-heal postojece baze: CREATE TABLE IF NOT EXISTS ne menja kolonu, a racuni su 19 cifara (bili 18).
+-- VAZNO: komentari u schemaSQL NE smeju sadrzati tacka-zarez jer execStatements deli skriptu po njoj.
+ALTER TABLE interbank_reservations ALTER COLUMN account_number TYPE VARCHAR(32);
 
 CREATE INDEX IF NOT EXISTS idx_interbank_reservations_tx
     ON interbank_reservations(transaction_id_routing, transaction_id_local);

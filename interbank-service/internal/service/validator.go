@@ -27,11 +27,49 @@ type AccountInfo struct {
 }
 
 // NegotiationLite is the minimal view of a negotiation row that the validator needs.
+//
+// ContractStatus / ContractSettlement carry the lifecycle of the OPTION CONTRACT that
+// the negotiation produced on accept (empty/zero when no contract exists yet). They are
+// what makes an EXERCISE tx pass: a negotiation is closed (IsOngoing=false) the moment it
+// is accepted, but the resulting option contract is still EXERCISABLE while it is ACTIVE
+// and its settlement date has not passed. Binding exercisability to the contract — not to
+// the negotiation's IsOngoing flag — is what lets an accepted cross-bank option actually
+// be used (see validateNegotiationOpen / validateOption).
 type NegotiationLite struct {
 	IsOngoing      bool
 	SettlementDate time.Time
 	Amount         int
 	PricePerUnit   decimal.Decimal
+
+	// ContractStatus is the status of the option contract backing this negotiation
+	// (e.g. "ACTIVE", "EXERCISED", "EXPIRED"), or "" when no contract exists yet
+	// (accept has not happened). ContractSettlement is that contract's settlement date.
+	ContractStatus     string
+	ContractSettlement time.Time
+}
+
+// ContractStatusActive mirrors store.ContractStatusActive — the only contract status that
+// makes an option exercisable. Duplicated here to keep the validator free of a store import.
+const ContractStatusActive = "ACTIVE"
+
+// negotiationExercisable reports whether the option backing this negotiation can still be
+// exercised: there is an ACTIVE contract whose settlement date is not before now. This is
+// the EXERCISE-time predicate (negotiation already closed on accept, contract still live).
+func negotiationExercisable(neg *NegotiationLite, now time.Time) bool {
+	if neg == nil || neg.ContractStatus != ContractStatusActive {
+		return false
+	}
+	// Settlement strictly in the future (option is unusable on/after settlement).
+	return neg.ContractSettlement.After(now)
+}
+
+// negotiationAcceptable reports whether the negotiation is still in its ACCEPT-time window:
+// ongoing and not past settlement. This is the original (pre-accept) predicate.
+func negotiationAcceptable(neg *NegotiationLite, now time.Time) bool {
+	if neg == nil || !neg.IsOngoing {
+		return false
+	}
+	return !neg.SettlementDate.Before(now)
 }
 
 // BankingCoreReader is what the validator needs from banking-core internal endpoints.
@@ -195,24 +233,91 @@ func (v *Validator) validatePersonAccount(ctx context.Context, person *protocol.
 		_ = monas
 		return nil, nil
 
+	case *protocol.StockAsset:
+		// PERSON + STOCK:
+		//   - Positive (incoming) → our user RECEIVES stock (e.g. the buyer-side
+		//     leg of a cross-bank OTC option exercise). Receiving an asset is always
+		//     acceptable — existence/capacity is not our concern here, exactly like
+		//     an incoming MONAS credit. The actual stock crediting happens via
+		//     trading-service on commit, outside the 2PC posting validation.
+		//   - Negative (outgoing) → our user would DELIVER stock via a raw posting.
+		//     B1 routes local stock delivery through trading-service reservations,
+		//     not raw protocol postings, so this stays UNACCEPTABLE_ASSET.
+		if p.Amount.IsPositive() {
+			return nil, nil
+		}
+		return &protocol.NoVoteReason{Reason: protocol.ReasonUnacceptableAsset, Posting: &p}, nil
+
 	default:
-		// PERSON + STOCK or other — UNACCEPTABLE_ASSET.
+		// PERSON + any other unsupported asset — UNACCEPTABLE_ASSET.
 		return &protocol.NoVoteReason{Reason: protocol.ReasonUnacceptableAsset, Posting: &p}, nil
 	}
 }
 
 // validateOptionPseudoAccount handles the OPTION account type.
-// OPTION + non-OPTION asset → UNACCEPTABLE_ASSET.
+//
 // OPTION + OPTION asset, routing=ours → run the option-specific checks.
 // OPTION + OPTION asset, routing=partner → not ours.
+//
+// OPTION + MONAS/STOCK asset (the premium / share legs a partner-coordinated accept
+// hangs off the option pseudo-account, e.g. B2 as coordinator with B1 as seller): when
+// the pseudo-account is on OUR routing and references a valid, ongoing negotiation, the
+// accompanying leg is accepted (FIX 3). Previously ANY non-OPTION asset on the pseudo-
+// account was rejected with UNACCEPTABLE_ASSET, which obered B2's accept-tx → 2PC abort.
+// The global balance-check still applies; only genuinely unsupported asset types remain
+// UNACCEPTABLE.
 func (v *Validator) validateOptionPseudoAccount(ctx context.Context, opt *protocol.OptionPseudoAccount, p protocol.Posting) (*protocol.NoVoteReason, error) {
-	if _, ok := p.Asset.(*protocol.OptionAsset); !ok {
+	switch p.Asset.(type) {
+	case *protocol.OptionAsset:
+		if opt.Id.RoutingNumber != v.myRouting {
+			return nil, nil
+		}
+		return v.validateOption(ctx, opt.Id, p)
+
+	case *protocol.MonasAsset, *protocol.StockAsset:
+		// Premium/share leg riding the option pseudo-account. Only our negotiations are
+		// our responsibility; a partner-routed pseudo-account is validated by the partner.
+		if opt.Id.RoutingNumber != v.myRouting {
+			return nil, nil
+		}
+		// The negotiation backing this pseudo-account must exist and still be ongoing for
+		// the leg to be acceptable (mirrors the OPTION_NEGOTIATION_NOT_FOUND /
+		// OPTION_USED_OR_EXPIRED checks, without the option-amount rule which only applies
+		// to the OPTION unit leg).
+		return v.validateNegotiationOpen(ctx, opt.Id, p)
+
+	default:
 		return &protocol.NoVoteReason{Reason: protocol.ReasonUnacceptableAsset, Posting: &p}, nil
 	}
-	if opt.Id.RoutingNumber != v.myRouting {
+}
+
+// validateNegotiationOpen verifies that the option backing an option pseudo-account is in
+// a usable lifecycle state for the MONAS/STOCK legs riding the pseudo-account. Two distinct
+// transaction shapes hang such legs off the pseudo-account:
+//
+//   - ACCEPT-shape (partner-coordinated accept, FIX 3): the negotiation is still ONGOING
+//     and the contract does not exist yet. negotiationAcceptable covers this.
+//   - EXERCISE-shape (cross-bank §2.7.2 exercise of an accepted option): the negotiation is
+//     CLOSED (accept set is_ongoing=false), but the resulting contract is still ACTIVE with
+//     a future settlement. negotiationExercisable covers this.
+//
+// Previously this rejected ANY non-ongoing negotiation with OPTION_USED_OR_EXPIRED, which
+// made every accepted cross-bank option impossible to exercise (accept always closes the
+// negotiation). We now accept the leg when EITHER predicate holds, and only reject
+// OPTION_USED_OR_EXPIRED when neither does (declined / already-exercised / expired contract).
+func (v *Validator) validateNegotiationOpen(ctx context.Context, id protocol.ForeignBankId, p protocol.Posting) (*protocol.NoVoteReason, error) {
+	if v.negs == nil {
+		return &protocol.NoVoteReason{Reason: protocol.ReasonOptionNegotiationNotFound, Posting: &p}, nil
+	}
+	neg, err := v.negs.FindNegotiation(ctx, id)
+	if err != nil || neg == nil {
+		return &protocol.NoVoteReason{Reason: protocol.ReasonOptionNegotiationNotFound, Posting: &p}, nil
+	}
+	now := time.Now()
+	if negotiationAcceptable(neg, now) || negotiationExercisable(neg, now) {
 		return nil, nil
 	}
-	return v.validateOption(ctx, opt.Id, p)
+	return &protocol.NoVoteReason{Reason: protocol.ReasonOptionUsedOrExpired, Posting: &p}, nil
 }
 
 // validateOption performs the three option-specific checks:
@@ -225,10 +330,12 @@ func (v *Validator) validateOption(ctx context.Context, id protocol.ForeignBankI
 	if err != nil || neg == nil {
 		return &protocol.NoVoteReason{Reason: protocol.ReasonOptionNegotiationNotFound, Posting: &p}, nil
 	}
-	if !neg.IsOngoing {
-		return &protocol.NoVoteReason{Reason: protocol.ReasonOptionUsedOrExpired, Posting: &p}, nil
-	}
-	if neg.SettlementDate.Before(time.Now()) {
+	// Lifecycle: accept-time (ongoing) OR exercise-time (closed negotiation, ACTIVE
+	// contract, future settlement). Reject only when the option is genuinely unusable.
+	// See validateNegotiationOpen for the rationale; kept consistent so the OPTION-unit
+	// leg and the MONAS/STOCK side legs apply the same exercisability rule.
+	now := time.Now()
+	if !negotiationAcceptable(neg, now) && !negotiationExercisable(neg, now) {
 		return &protocol.NoVoteReason{Reason: protocol.ReasonOptionUsedOrExpired, Posting: &p}, nil
 	}
 	// Amount check: |amount| ∈ {1, k, k·π}
@@ -242,10 +349,17 @@ func (v *Validator) validateOption(ctx context.Context, id protocol.ForeignBankI
 	return nil, nil
 }
 
-// accountIsOurs returns true if the 18-digit account number's routing prefix (first 3 digits)
+// accountIsOurs returns true if the account number's routing prefix (first 3 digits)
 // matches our routing number.
+//
+// Length is NOT fixed at 18: Banka 1 issues both 18-digit (bank/exchange) and
+// 19-digit (client) account numbers, so we match on the routing prefix only.
+// A previous `len(num) != 18` guard silently rejected every 19-digit client
+// account, so inbound cross-bank postings to a client were not recognised as ours
+// and the recipient was never credited (cross-bank money vanished). Existence is
+// still verified downstream by ResolveAccount, so prefix-matching is safe.
 func (v *Validator) accountIsOurs(num string) bool {
-	if len(num) != 18 {
+	if len(num) < 18 {
 		return false
 	}
 	prefix := num[:3]

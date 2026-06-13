@@ -89,15 +89,20 @@ services:
           memory: 192M
 
   # Toxiproxy TCP proxy for SAGA integration tests (SG-09b/c, SG-10).
-  # Admin API on :8474; proxied ports configured at test runtime.
+  # Admin API on :8474. Proxies for banking-core (:18084) and trading-service
+  # (:18088) are created at boot from toxiproxy.json as transparent passthroughs;
+  # tests add/remove toxics on them at runtime via the admin API.
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.10.0
     container_name: banka_toxiproxy
     restart: unless-stopped
+    command: ["-host=0.0.0.0", "-config=/etc/toxiproxy/toxiproxy.json"]
+    volumes:
+      - ./toxiproxy/toxiproxy.json:/etc/toxiproxy/toxiproxy.json:ro
     ports:
       - "8474:8474"   # admin API
-      - "18084:18084" # banking-core proxy port (tests configure at runtime)
-      - "18088:18088" # trading-service proxy port (tests configure at runtime)
+      - "18084:18084" # banking-core proxy port (toxics configured at test runtime)
+      - "18088:18088" # trading-service proxy port (toxics configured at test runtime)
     networks:
       - banka-network
 
@@ -275,6 +280,65 @@ services:
         limits:
           memory: 128M
         reservations:
+          memory: 64M
+
+  # =========================================================================
+  # Black-box monitoring exporters — mere servise SPOLJA, kod servisa se NE dira.
+  # blackbox: health probe (down + latencija) | postgres/rabbitmq: infra metрике
+  # cadvisor: memorija/CPU/restart po kontejneru.
+  # =========================================================================
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: banka_blackbox_exporter
+    restart: unless-stopped
+    volumes:
+      - ./blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    expose:
+      - "9115"
+    networks:
+      - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: banka_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@banka_postgres:5432/postgres?sslmode=disable"
+    expose:
+      - "9187"
+    depends_on:
+      - postgres
+    networks:
+      - banka-network
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  # Cita postojeci RabbitMQ management API (15672) — NE dira rabbitmq kontejner.
+  # NOTE: tag :latest radi pouzdano; pin-uj na konkretan RC posle verifikacije.
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter:latest
+    container_name: banka_rabbitmq_exporter
+    restart: unless-stopped
+    environment:
+      RABBIT_URL: "http://rabbitmq:15672"
+      RABBIT_USER: "${RABBITMQ_USERNAME:-guest}"
+      RABBIT_PASSWORD: "${RABBITMQ_PASSWORD:-guest}"
+      PUBLISH_PORT: "9419"
+    expose:
+      - "9419"
+    depends_on:
+      - rabbitmq
+    networks:
+      - banka-network
+    deploy:
+      resources:
+        limits:
           memory: 64M
 
   loki:
@@ -873,7 +937,9 @@ services:
       # --- RabbitMQ broker URL (double-prefix: Config.Saga.RabbitMQURL) ---
       SAGA_SAGA_RABBITMQ_URL: "amqp://${RABBITMQ_USERNAME:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:${RABBITMQ_PORT:-5672}/"
       # --- Downstream Java service URLs (double-prefix: Config.Saga.Services.*) ---
-      SAGA_SAGA_SERVICES_BANKING_CORE_URL: "http://banking-core-service:${BANKING_CORE_SERVICE_PORT:-8084}"
+      # Banking-core traffic is routed through Toxiproxy (transparent passthrough
+      # by default) so SAGA e2e tests can inject latency/outages (SG-09b/c, SG-10).
+      SAGA_SAGA_SERVICES_BANKING_CORE_URL: "${SAGA_BANKING_CORE_URL:-http://toxiproxy:18084}"
       SAGA_SAGA_SERVICES_TRADING_URL: "http://trading-service:${TRADING_SERVICE_PORT:-8088}"
       SAGA_SAGA_SERVICES_MARKET_URL: "http://market-service:${MARKET_SERVICE_PORT:-8085}"
       SAGA_SAGA_SERVICES_TIMEOUT: "${SAGA_SERVICES_TIMEOUT:-30s}"
@@ -888,6 +954,7 @@ services:
       trading-service: { condition: service_healthy }
       market-service: { condition: service_healthy }
       otel-collector: { condition: service_started }
+      toxiproxy: { condition: service_started }
     expose:
       - "${SAGA_SERVER_PORT:-8095}"
     ports:

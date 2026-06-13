@@ -159,6 +159,12 @@ func (ibPortStub) UpdateReservedQuantity(context.Context, portfolio.Querier, int
 func (ibPortStub) UpdateQuantityAndReserved(context.Context, portfolio.Querier, int64, int, int) error {
 	return nil
 }
+func (ibPortStub) UpdateQuantityAndAvg(context.Context, portfolio.Querier, int64, int, decimal.Decimal) error {
+	return nil
+}
+func (ibPortStub) Insert(context.Context, portfolio.Querier, int64, int64, string, int, decimal.Decimal) error {
+	return nil
+}
 func (ibPortStub) FindAllPublicStocks(context.Context, portfolio.Querier) ([]portfolio.Portfolio, error) {
 	return nil, nil
 }
@@ -166,6 +172,9 @@ func (ibPortStub) FindAllPublicStocks(context.Context, portfolio.Querier) ([]por
 type ibMktStub struct{}
 
 func (ibMktStub) GetListing(context.Context, int64) (*clients.StockListing, error) { return nil, nil }
+func (ibMktStub) ResolveStockListing(context.Context, string) (*clients.StockListingSummary, error) {
+	return nil, nil
+}
 
 func newInterbankHandlers() *Handlers {
 	svc := interbank.NewServiceForTest(ibRepoStub{}, ibPortStub{}, ibMktStub{}, noTx, 111, nil)

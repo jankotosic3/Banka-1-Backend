@@ -6,8 +6,8 @@ global:
 route:
   receiver: discord-bot
   group_by: ['alertname', 'service', 'service_name']
-  group_wait: 10s          # wait before sending the first batch of a new group
-  group_interval: 30s      # wait between batches of the same group
+  group_wait: 5s           # wait before sending the first batch of a new group
+  group_interval: 10s      # wait between batches of the same group
   repeat_interval: 4h      # re-send an unresolved alert every 4h
 
 receivers:

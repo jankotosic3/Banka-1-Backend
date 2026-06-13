@@ -32,6 +32,49 @@ func (c *MarketClient) GetListing(ctx context.Context, id int64) (*StockListing,
 	return &out, nil
 }
 
+// StockListingSummary is the subset of market-service's ListingSummaryResponse
+// (GET /api/listings/stocks) that the interbank credit-stock path consumes when
+// resolving a ticker to its listing id + current price.
+type StockListingSummary struct {
+	ListingID int64           `json:"listingId"`
+	Ticker    string          `json:"ticker"`
+	Price     decimal.Decimal `json:"price"`
+	Currency  string          `json:"currency"`
+}
+
+// stockListingPage mirrors the Spring-style PageListingSummaryResponse envelope
+// (only the content slice is consumed).
+type stockListingPage struct {
+	Content []StockListingSummary `json:"content"`
+}
+
+// ResolveStockListing resolves a ticker to its STOCK listing (id + current price)
+// via market-service's paginated stock-listing endpoint
+// (GET /api/listings/stocks?search=TICKER), filtering for an exact case-insensitive
+// ticker match. Returns (nil, nil) when no listing matches. Used by the interbank
+// credit-stock path (FIX 1: crediting a local buyer the shares delivered on a
+// cross-bank OTC option exercise), which needs the listing id to key the portfolio
+// row and a sensible average purchase price.
+func (c *MarketClient) ResolveStockListing(ctx context.Context, ticker string) (*StockListingSummary, error) {
+	wanted := strings.TrimSpace(ticker)
+	if wanted == "" {
+		return nil, nil
+	}
+	q := url.Values{}
+	q.Set("search", wanted)
+	q.Set("size", "200")
+	var page stockListingPage
+	if err := c.base.doJSON(ctx, http.MethodGet, "/api/listings/stocks", q, nil, &page); err != nil {
+		return nil, err
+	}
+	for i := range page.Content {
+		if strings.EqualFold(strings.TrimSpace(page.Content[i].Ticker), wanted) {
+			return &page.Content[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // Calculate mirrors ExchangeClient.calculate: GET /calculate?fromCurrency&toCurrency&amount.
 func (c *MarketClient) Calculate(ctx context.Context, from, to string, amount decimal.Decimal) (*ExchangeRate, error) {
 	q := url.Values{}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 )
 
 // ---- stubs ----
@@ -52,6 +53,24 @@ type stubIBPortfolio struct {
 	position  *portfolio.Portfolio
 	posOneErr error
 	updateErr error
+	insertErr error
+
+	// FIX 1 credit-stock call capture.
+	inserted     []insertedLot
+	updatedQtyAvg []updatedLot
+}
+
+type insertedLot struct {
+	userID, listingID int64
+	listingType       string
+	quantity          int
+	avg               decimal.Decimal
+}
+
+type updatedLot struct {
+	id       int64
+	quantity int
+	avg      decimal.Decimal
 }
 
 func (s *stubIBPortfolio) Pool() *pgxpool.Pool { return nil }
@@ -70,6 +89,20 @@ func (s *stubIBPortfolio) UpdateReservedQuantity(_ context.Context, _ portfolio.
 func (s *stubIBPortfolio) UpdateQuantityAndReserved(_ context.Context, _ portfolio.Querier, _ int64, _, _ int) error {
 	return s.updateErr
 }
+func (s *stubIBPortfolio) UpdateQuantityAndAvg(_ context.Context, _ portfolio.Querier, id int64, quantity int, avg decimal.Decimal) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	s.updatedQtyAvg = append(s.updatedQtyAvg, updatedLot{id: id, quantity: quantity, avg: avg})
+	return nil
+}
+func (s *stubIBPortfolio) Insert(_ context.Context, _ portfolio.Querier, userID, listingID int64, listingType string, quantity int, avg decimal.Decimal) error {
+	if s.insertErr != nil {
+		return s.insertErr
+	}
+	s.inserted = append(s.inserted, insertedLot{userID: userID, listingID: listingID, listingType: listingType, quantity: quantity, avg: avg})
+	return nil
+}
 func (s *stubIBPortfolio) FindAllPublicStocks(_ context.Context, _ portfolio.Querier) ([]portfolio.Portfolio, error) {
 	return s.positions, s.posErr
 }
@@ -77,10 +110,18 @@ func (s *stubIBPortfolio) FindAllPublicStocks(_ context.Context, _ portfolio.Que
 type stubIBMarket struct {
 	listing    *clients.StockListing
 	listingErr error
+
+	// FIX 1 ResolveStockListing stub.
+	summary    *clients.StockListingSummary
+	summaryErr error
 }
 
 func (s *stubIBMarket) GetListing(_ context.Context, _ int64) (*clients.StockListing, error) {
 	return s.listing, s.listingErr
+}
+
+func (s *stubIBMarket) ResolveStockListing(_ context.Context, _ string) (*clients.StockListingSummary, error) {
+	return s.summary, s.summaryErr
 }
 
 func noopTx(_ context.Context, fn func(pgx.Tx) error) error { return fn(nil) }
@@ -251,6 +292,92 @@ func TestReleaseStock_Success(t *testing.T) {
 	svc := newIBService(repo, port, &stubIBMarket{})
 	if err := svc.ReleaseStock(context.Background(), "r1"); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ---- CreditStock (FIX 1) ----
+
+func TestCreditStock_ZeroQuantity_Error(t *testing.T) {
+	svc := newIBService(&stubIBRepo{}, &stubIBPortfolio{}, &stubIBMarket{})
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 0, 222, "tx-x", decimal.NewFromInt(10)); err == nil {
+		t.Error("expected error for zero quantity")
+	}
+}
+
+func TestCreditStock_BlankTicker_Error(t *testing.T) {
+	svc := newIBService(&stubIBRepo{}, &stubIBPortfolio{}, &stubIBMarket{})
+	if err := svc.CreditStock(context.Background(), 7, "  ", 5, 222, "tx-x", decimal.NewFromInt(10)); err == nil {
+		t.Error("expected error for blank ticker")
+	}
+}
+
+func TestCreditStock_NoListing_Error(t *testing.T) {
+	mkt := &stubIBMarket{summary: nil} // ResolveStockListing → no match
+	svc := newIBService(&stubIBRepo{}, &stubIBPortfolio{}, mkt)
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 5, 222, "tx-x", decimal.NewFromInt(10)); err == nil {
+		t.Error("expected 404 when ticker resolves to no listing")
+	}
+}
+
+func TestCreditStock_NewLot_Inserts(t *testing.T) {
+	mkt := &stubIBMarket{summary: &clients.StockListingSummary{ListingID: 99, Ticker: "AAPL", Price: decimal.NewFromInt(150)}}
+	port := &stubIBPortfolio{position: nil} // buyer holds no position yet
+	svc := newIBService(&stubIBRepo{}, port, mkt)
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 5, 222, "tx-x", decimal.NewFromInt(140)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(port.inserted) != 1 {
+		t.Fatalf("expected 1 insert, got %d", len(port.inserted))
+	}
+	got := port.inserted[0]
+	if got.userID != 7 || got.listingID != 99 || got.quantity != 5 || got.listingType != "STOCK" {
+		t.Errorf("unexpected insert: %+v", got)
+	}
+	if !got.avg.Equal(decimal.NewFromInt(150)) { // uses listing price, not strike
+		t.Errorf("expected avg=150 (listing price), got %s", got.avg)
+	}
+}
+
+func TestCreditStock_NewLot_FallsBackToStrikeWhenNoPrice(t *testing.T) {
+	mkt := &stubIBMarket{summary: &clients.StockListingSummary{ListingID: 99, Ticker: "AAPL", Price: decimal.Zero}}
+	port := &stubIBPortfolio{position: nil}
+	svc := newIBService(&stubIBRepo{}, port, mkt)
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 5, 222, "tx-x", decimal.NewFromInt(140)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(port.inserted) != 1 || !port.inserted[0].avg.Equal(decimal.NewFromInt(140)) {
+		t.Errorf("expected fallback avg=140 (strike), got %+v", port.inserted)
+	}
+}
+
+func TestCreditStock_ExistingLot_MergesWeightedAvg(t *testing.T) {
+	mkt := &stubIBMarket{summary: &clients.StockListingSummary{ListingID: 99, Ticker: "AAPL", Price: decimal.NewFromInt(200)}}
+	// Existing: 10 shares @ 100. Incoming: 10 shares @ 200 → 20 @ 150.
+	port := &stubIBPortfolio{position: &portfolio.Portfolio{ID: 3, Quantity: 10, AveragePurchasePrice: decimal.NewFromInt(100)}}
+	svc := newIBService(&stubIBRepo{}, port, mkt)
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 10, 222, "tx-x", decimal.NewFromInt(180)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(port.inserted) != 0 {
+		t.Errorf("expected no insert on merge, got %d", len(port.inserted))
+	}
+	if len(port.updatedQtyAvg) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(port.updatedQtyAvg))
+	}
+	got := port.updatedQtyAvg[0]
+	if got.id != 3 || got.quantity != 20 {
+		t.Errorf("unexpected updated qty: %+v", got)
+	}
+	if !got.avg.Equal(decimal.NewFromInt(150)) {
+		t.Errorf("expected weighted avg=150, got %s", got.avg)
+	}
+}
+
+func TestCreditStock_MarketError_Propagates(t *testing.T) {
+	mkt := &stubIBMarket{summaryErr: errors.New("market down")}
+	svc := newIBService(&stubIBRepo{}, &stubIBPortfolio{}, mkt)
+	if err := svc.CreditStock(context.Background(), 7, "AAPL", 5, 222, "tx-x", decimal.NewFromInt(10)); err == nil {
+		t.Error("expected error to propagate from market resolution")
 	}
 }
 

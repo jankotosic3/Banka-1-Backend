@@ -177,7 +177,7 @@ func TestCommitRef_AllKinds(t *testing.T) {
 		{Kind: store.RefKindOption, NegotiationRouting: &negRouting, NegotiationID: &negID},
 	}
 	for _, ref := range refs {
-		if err := e.commitRef(context.Background(), ref); err != nil {
+		if err := e.commitRef(context.Background(), ref, protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-commit"}); err != nil {
 			t.Errorf("commitRef %s: %v", ref.Kind, err)
 		}
 	}

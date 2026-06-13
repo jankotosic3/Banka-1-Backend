@@ -89,7 +89,7 @@ func buildTestRouter(exec InboundExecutor, msgs InboundMessageStore) http.Handle
 		Routing:      testTheirRouting,
 		InboundToken: testApiKey,
 	}}}
-	h := NewInboundHandler(exec, msgs, nil)
+	h := NewInboundHandler(exec, msgs, nil, nil)
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireXApiKey(partners))

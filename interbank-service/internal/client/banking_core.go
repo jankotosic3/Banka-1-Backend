@@ -78,12 +78,17 @@ func (c *BankingCoreClient) FindAccountByOwnerAndCurrency(ctx context.Context, o
 // ReserveMonas places a reservation for the given amount on the account.
 // Returns the reservation UUID. Idempotent per (txIDRouting, txIDLocal) on the server.
 func (c *BankingCoreClient) ReserveMonas(ctx context.Context, accountNum, currency string, amount decimal.Decimal, txIDRouting int, txIDLocal string) (string, error) {
+	// NOTE: field names MUST match banking-core's ReserveMonasRequest json tags
+	// (transactionIdRouting / transactionIdLocal). A previous mismatch
+	// (txIdRouting / txIdLocal) left TransactionIdLocal empty server-side, so every
+	// outbound MONAS reservation failed with "transactionIdLocal je obavezan" (400) —
+	// breaking the sender-debit leg of cross-bank payments and OTC buyer premiums.
 	body := map[string]any{
-		"accountNum":  accountNum,
-		"currency":    currency,
-		"amount":      amount.String(),
-		"txIdRouting": txIDRouting,
-		"txIdLocal":   txIDLocal,
+		"accountNum":           accountNum,
+		"currency":             currency,
+		"amount":               amount.String(),
+		"transactionIdRouting": txIDRouting,
+		"transactionIdLocal":   txIDLocal,
 	}
 	var resp struct {
 		ReservationID string `json:"reservationId"`
@@ -92,6 +97,39 @@ func (c *BankingCoreClient) ReserveMonas(ctx context.Context, accountNum, curren
 		return "", err
 	}
 	return resp.ReservationID, nil
+}
+
+// CreditMonas credits an account for an INCOMING inter-bank transfer (money arriving
+// at one of our accounts). Unlike CommitMonas — which finalizes a prior reservation
+// (a debit) — this directly increases the recipient's balance via banking-core's
+// POST /internal/accounts/credit. clientID MUST be the account owner: banking-core
+// validates ownership (validateMutable) and rejects a mismatch unless the owner is the
+// bank (-1). Returns nil on 2xx.
+func (c *BankingCoreClient) CreditMonas(ctx context.Context, accountNum string, amount decimal.Decimal, clientID int64) error {
+	body := map[string]any{
+		"accountNumber": accountNum,
+		"amount":        amount.String(),
+		"clientId":      clientID,
+	}
+	return c.do(ctx, http.MethodPost, c.baseURL+"/internal/accounts/credit", body, nil)
+}
+
+// RecordInterbankPayment asks banking-core to insert a COMPLETED payment_table row for a
+// cross-bank money movement so it shows up in this bank's transaction history. orderNumber
+// is the idempotency key (banking-core does ON CONFLICT DO NOTHING). Best-effort by
+// contract: callers log and continue on failure — it must never roll back a settled
+// transfer. Returns nil on 2xx.
+func (c *BankingCoreClient) RecordInterbankPayment(ctx context.Context, orderNumber, fromAccount, toAccount string, amount decimal.Decimal, currency, recipientName, paymentPurpose string) error {
+	body := map[string]any{
+		"orderNumber":    orderNumber,
+		"fromAccount":    fromAccount,
+		"toAccount":      toAccount,
+		"amount":         amount.String(),
+		"currency":       currency,
+		"recipientName":  recipientName,
+		"paymentPurpose": paymentPurpose,
+	}
+	return c.do(ctx, http.MethodPost, c.baseURL+"/internal/interbank/record-payment", body, nil)
 }
 
 // CommitMonas permanently debits the reserved amount. Returns nil on 204.

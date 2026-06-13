@@ -23,16 +23,57 @@ const (
 	RefKindMonas  = "MONAS"
 	RefKindStock  = "STOCK"
 	RefKindOption = "OPTION"
+	// RefKindOptionExercise marks the seller-side delivery of a cross-bank OTC option
+	// EXERCISE (the negative STOCK leg on our option pseudo-account, §2.7.2). On commit it
+	// drives ExerciseOption — committing the seller's already-held accept-time stock
+	// reservation (quantity & reserved_quantity decrement) and flipping the option to
+	// EXERCISED. It reserves NOTHING new at prepare (the shares were reserved at accept),
+	// so releaseRef is a deliberate no-op: an exercise abort must leave the accept-time
+	// reservation intact for a retry — releasing it (as a plain OPTION ref would) would
+	// strand the option without its backing shares.
+	RefKindOptionExercise = "OPTION_EXERCISE"
+	// RefKindMonasCredit marks an INCOMING money posting to one of our accounts.
+	// Unlike the others it is not a reservation: nothing is held at prepare; the
+	// recipient is credited on commit, and releaseRef is a no-op (no debit to undo).
+	RefKindMonasCredit = "MONAS_CREDIT"
+	// RefKindStockCredit marks an INCOMING stock posting to one of our local buyers
+	// (the buyer-side STOCK leg of a cross-bank OTC option exercise). Like
+	// MONAS_CREDIT it reserves nothing at prepare: the shares are credited to the
+	// buyer's portfolio on commit (via trading-service), and releaseRef is a no-op.
+	// Without this the exercise debited the buyer's strike cash but never delivered
+	// the shares (FIX 1: asset-conservation).
+	RefKindStockCredit = "STOCK_CREDIT"
 )
 
 // ReservationRef captures a downstream reservation made during prepareLocal.
 // On COMMIT_TX we commit each ref; on ROLLBACK_TX we release each ref (LIFO).
 // Stored as JSONB array in interbank_transactions.reservation_refs.
 type ReservationRef struct {
-	Kind               string  `json:"kind"`                         // MONAS | STOCK | OPTION
-	ReservationID      string  `json:"reservationId,omitempty"`       // banking-core / trading UUID
+	Kind               string  `json:"kind"`                         // MONAS | STOCK | OPTION | MONAS_CREDIT
+	ReservationID      string  `json:"reservationId,omitempty"`      // banking-core / trading UUID
 	NegotiationRouting *int    `json:"negotiationRouting,omitempty"` // OPTION refs only
 	NegotiationID      *string `json:"negotiationId,omitempty"`      // OPTION refs only
+
+	// MONAS_CREDIT refs only — an incoming credit applied (not reserved) on commit.
+	CreditAccountNum string `json:"creditAccountNum,omitempty"`
+	CreditAmount     string `json:"creditAmount,omitempty"` // decimal serialized as a plain string
+	CreditClientID   int64  `json:"creditClientId,omitempty"`
+	// CreditCurrency and CreditFromAccount carry the audit metadata needed to record
+	// the incoming money in this bank's transaction history on commit. CreditFromAccount
+	// is the foreign sender's account (the matching negative MONAS posting), or "" when
+	// the sender is a Person-only counterparty with no real account number on the wire.
+	CreditCurrency    string `json:"creditCurrency,omitempty"`
+	CreditFromAccount string `json:"creditFromAccount,omitempty"`
+
+	// STOCK_CREDIT refs only — an incoming stock delivery to a local buyer, credited
+	// (not reserved) on commit via trading-service. StockCreditBuyerID is the local
+	// owner id; StockCreditTicker / StockCreditQuantity describe the shares; and
+	// StockCreditStrike is the contract strike used as the average-purchase-price
+	// fallback when trading-service has no live market price for the ticker.
+	StockCreditBuyerID  int64  `json:"stockCreditBuyerId,omitempty"`
+	StockCreditTicker   string `json:"stockCreditTicker,omitempty"`
+	StockCreditQuantity int    `json:"stockCreditQuantity,omitempty"`
+	StockCreditStrike   string `json:"stockCreditStrike,omitempty"` // decimal serialized as a plain string
 }
 
 // Transaction is one row in interbank_transactions.

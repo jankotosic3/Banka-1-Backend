@@ -34,6 +34,22 @@ func (h *Handlers) InterbankReserveStock(w http.ResponseWriter, r *http.Request)
 	httpx.JSON(w, http.StatusOK, interbank.ReserveStockRes{ReservationID: reservationID})
 }
 
+// InterbankCreditStock ↔ POST /internal/interbank/credit-stock (204). Credits the
+// local buyer the shares delivered on a cross-bank OTC option exercise (FIX 1).
+func (h *Handlers) InterbankCreditStock(w http.ResponseWriter, r *http.Request) {
+	var req interbank.CreditStockReq
+	if err := decodeJSONLenient(r, &req); err != nil {
+		writeDomainError(w, r, api.NewOrderError(http.StatusBadRequest, "Malformed JSON request body"))
+		return
+	}
+	if err := h.app.Interbank.CreditStock(r.Context(), req.BuyerUserID, req.Ticker,
+		req.Quantity, req.TransactionIDRouting, req.TransactionIDLocal, req.StrikePrice); err != nil {
+		writeDomainError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // InterbankCommitStock ↔ POST /internal/interbank/reservations/{id}/commit-stock
 // (204). {id} is the reservation UUID (string).
 func (h *Handlers) InterbankCommitStock(w http.ResponseWriter, r *http.Request) {

@@ -24,6 +24,7 @@ type Service struct {
 	logger         *slog.Logger
 	alphaClient    *clients.AlphaVantageClient
 	alertPublisher PriceAlertPublisher
+	historyStore   PriceHistoryStore
 }
 
 var (
@@ -59,6 +60,10 @@ func (s *Service) SetAlphaClient(client *clients.AlphaVantageClient) {
 
 func (s *Service) SetPriceAlertPublisher(publisher PriceAlertPublisher) {
 	s.alertPublisher = publisher
+}
+
+func (s *Service) SetPriceHistoryStore(store PriceHistoryStore) {
+	s.historyStore = store
 }
 
 func (s *Service) GetExchangeStatus(ctx context.Context, id int64) (*api.StockExchangeStatusResponse, error) {
@@ -154,7 +159,7 @@ func (s *Service) GetListingDetails(ctx context.Context, id int64, period string
 	if err != nil {
 		return nil, err
 	}
-	history, err := s.repo.GetListingHistory(ctx, id, periodStart(time.Now(), period))
+	history, err := s.getListingHistory(ctx, id, periodStart(time.Now(), period))
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +338,7 @@ func (s *Service) RefreshListing(ctx context.Context, listingID int64) (*api.Lis
 		if err := s.repo.UpdateListingSnapshot(ctx, listing.ID, listing.Ticker, quote.Price.StringFixed(8), quote.Ask.StringFixed(8), quote.Bid.StringFixed(8), quote.Change.StringFixed(8), quote.Volume, refreshTime); err != nil {
 			return nil, err
 		}
-		if err := s.repo.UpsertDailySnapshot(ctx, listing.ID, snapshotDate, quote.Price.StringFixed(8), quote.Ask.StringFixed(8), quote.Bid.StringFixed(8), quote.Change.StringFixed(8), quote.Volume); err != nil {
+		if err := s.saveDailySnapshot(ctx, *listing, snapshotDate, quote.Price.StringFixed(8), quote.Ask.StringFixed(8), quote.Bid.StringFixed(8), quote.Change.StringFixed(8), quote.Volume); err != nil {
 			return nil, err
 		}
 	case ListingTypeForex:
@@ -360,7 +365,7 @@ func (s *Service) RefreshListing(ctx context.Context, listingID int64) (*api.Lis
 		if err := s.repo.UpdateListingSnapshot(ctx, listing.ID, listing.Ticker, rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), change.StringFixed(8), 1000, refreshTime); err != nil {
 			return nil, err
 		}
-		if err := s.repo.UpsertDailySnapshot(ctx, listing.ID, snapshotDate, rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), change.StringFixed(8), 1000); err != nil {
+		if err := s.saveDailySnapshot(ctx, *listing, snapshotDate, rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), rate.ExchangeRate.StringFixed(8), change.StringFixed(8), 1000); err != nil {
 			return nil, err
 		}
 	default:
@@ -405,6 +410,10 @@ func (s *Service) RefreshStockByTicker(ctx context.Context, ticker string) (*api
 	if err := s.repo.UpdateListingSnapshot(ctx, stock.ListingID, stock.Ticker, quote.Price.StringFixed(8), quote.Ask.StringFixed(8), quote.Bid.StringFixed(8), quote.Change.StringFixed(8), quote.Volume, refreshTime); err != nil {
 		return nil, err
 	}
+	listing, err := s.repo.GetListing(ctx, stock.ListingID)
+	if err != nil {
+		return nil, err
+	}
 	count := 0
 	sort.Slice(daily, func(i, j int) bool { return daily[i].Date.After(daily[j].Date) })
 	if len(daily) > 30 {
@@ -424,7 +433,7 @@ func (s *Service) RefreshStockByTicker(ctx context.Context, ticker string) (*api
 			volume = quote.Volume
 			change = quote.Change
 		}
-		if err := s.repo.UpsertDailySnapshot(ctx, stock.ListingID, item.Date, item.ClosePrice.StringFixed(8), ask.StringFixed(8), bid.StringFixed(8), change.StringFixed(8), volume); err != nil {
+		if err := s.saveDailySnapshot(ctx, *listing, item.Date, item.ClosePrice.StringFixed(8), ask.StringFixed(8), bid.StringFixed(8), change.StringFixed(8), volume); err != nil {
 			return nil, err
 		}
 		count++
@@ -436,6 +445,44 @@ func (s *Service) RefreshStockByTicker(ctx context.Context, ticker string) (*api
 		RefreshedDailyEntries: count,
 		LastRefresh:           formatLocalDateTime(refreshTime),
 	}, nil
+}
+
+func (s *Service) getListingHistory(ctx context.Context, listingID int64, from time.Time) ([]DailyPriceInfo, error) {
+	if s.historyStore != nil {
+		history, err := s.historyStore.FindDailySnapshots(ctx, listingID, from)
+		if err == nil && len(history) > 0 {
+			return history, nil
+		}
+		if err != nil && s.logger != nil {
+			s.logger.Warn("influx price history read failed", "listingId", listingID, "error", err.Error())
+		}
+	}
+	return s.repo.GetListingHistory(ctx, listingID, from)
+}
+
+func (s *Service) saveDailySnapshot(ctx context.Context, listing Listing, day time.Time, price, ask, bid, change string, volume int64) error {
+	if err := s.repo.UpsertDailySnapshot(ctx, listing.ID, day, price, ask, bid, change, volume); err != nil {
+		return err
+	}
+	if s.historyStore == nil {
+		return nil
+	}
+	point := ListingPricePoint{
+		ListingID:       listing.ID,
+		Ticker:          listing.Ticker,
+		ListingType:     listing.ListingType,
+		ExchangeMICCode: listing.ExchangeMICCode,
+		Date:            day,
+		Price:           price,
+		Ask:             ask,
+		Bid:             bid,
+		Change:          change,
+		Volume:          volume,
+	}
+	if err := s.historyStore.SaveDailySnapshots(ctx, []ListingPricePoint{point}); err != nil && s.logger != nil {
+		s.logger.Warn("influx price history write failed", "listingId", listing.ID, "ticker", listing.Ticker, "error", err.Error())
+	}
+	return nil
 }
 
 func resolveMarketPhase(now time.Time, exchange *StockExchange, workingDay bool) MarketPhase {

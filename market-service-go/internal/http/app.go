@@ -29,6 +29,7 @@ func NewApp(ctx context.Context, cfg platform.Config, db *pgxpool.Pool, logger *
 	fxRepo := fx.NewRepository(db)
 	fxService := fx.NewService(cfg, fxRepo)
 	marketService := market.NewService(cfg, marketRepo, fxService, logger)
+	marketService.SetPriceHistoryStore(market.NewInfluxPriceHistoryStore(cfg, logger))
 	priceFeed := market.NewPriceFeedService(cfg, logger)
 	eventPublisher, err := platform.NewRabbitPublisher(ctx, logger)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -19,9 +20,9 @@ import (
 
 // fakeExecStore is an in-memory ExecutorStore.
 type fakeExecStore struct {
-	txns    map[string]*store.Transaction // key: "routing:id"
-	failOn  string                        // if non-empty, PersistPrepared returns error
-	nextID  int64
+	txns   map[string]*store.Transaction // key: "routing:id"
+	failOn string                        // if non-empty, PersistPrepared returns error
+	nextID int64
 }
 
 func (f *fakeExecStore) key(routing int, id string) string {
@@ -82,11 +83,16 @@ type fakeBankingCoreReserver struct {
 	reserved  []string // reservation IDs created
 	committed []string
 	released  []string
+	credited  []creditCall          // CreditMonas calls (incoming credits applied on commit)
+	recorded  []recordedPaymentCall // RecordInterbankPayment calls (transaction-history audit)
 
 	failReserve bool
 	reserveErr  error
 	// failAfter: if > 0, the Nth call to ReserveMonas (1-indexed) will fail.
 	failAfter int
+	// failCredit: when true, CreditMonas fails (used to exercise FIX B settlement-failure
+	// → claim-release recovery).
+	failCredit bool
 }
 
 func newFakeBC(accounts map[string]*AccountInfo) *fakeBankingCoreReserver {
@@ -146,6 +152,41 @@ func (f *fakeBankingCoreReserver) ReleaseMonas(_ context.Context, reservationID 
 	return nil
 }
 
+// creditCall records one CreditMonas invocation for assertions.
+type creditCall struct {
+	account  string
+	amount   string
+	clientID int64
+}
+
+func (f *fakeBankingCoreReserver) CreditMonas(_ context.Context, accountNum string, amount decimal.Decimal, clientID int64) error {
+	if f.failCredit {
+		return errors.New("fakeBankingCoreReserver: CreditMonas forced failure")
+	}
+	f.credited = append(f.credited, creditCall{account: accountNum, amount: amount.String(), clientID: clientID})
+	return nil
+}
+
+// recordedPaymentCall records one RecordInterbankPayment invocation for assertions.
+type recordedPaymentCall struct {
+	orderNumber string
+	fromAccount string
+	toAccount   string
+	amount      string
+	currency    string
+}
+
+func (f *fakeBankingCoreReserver) RecordInterbankPayment(_ context.Context, orderNumber, fromAccount, toAccount string, amount decimal.Decimal, currency, _, _ string) error {
+	f.recorded = append(f.recorded, recordedPaymentCall{
+		orderNumber: orderNumber,
+		fromAccount: fromAccount,
+		toAccount:   toAccount,
+		amount:      amount.String(),
+		currency:    currency,
+	})
+	return nil
+}
+
 // fakeTradingReserver implements TradingReserver.
 type fakeTradingReserver struct {
 	reserved  []string
@@ -154,6 +195,19 @@ type fakeTradingReserver struct {
 
 	failReserveStock bool
 	optionSellers    map[string]string // negotiation id → sellerForeignID (for lookup validation)
+
+	// FIX 1 stock-credit capture.
+	stockCredits  []stockCreditCall
+	failCreditStk bool
+}
+
+type stockCreditCall struct {
+	buyerUserID int64
+	ticker      string
+	quantity    int
+	txRouting   int
+	txLocal     string
+	strike      decimal.Decimal
 }
 
 func (f *fakeTradingReserver) ReserveStock(_ context.Context, sellerUserID int64, ticker string, quantity int, txIDRouting int, txIDLocal string) (string, error) {
@@ -163,6 +217,17 @@ func (f *fakeTradingReserver) ReserveStock(_ context.Context, sellerUserID int64
 	id := "stock-res-" + ticker
 	f.reserved = append(f.reserved, id)
 	return id, nil
+}
+
+func (f *fakeTradingReserver) CreditStock(_ context.Context, buyerUserID int64, ticker string, quantity int, txIDRouting int, txIDLocal string, strike decimal.Decimal) error {
+	if f.failCreditStk {
+		return errors.New("fakeTradingReserver: CreditStock forced failure")
+	}
+	f.stockCredits = append(f.stockCredits, stockCreditCall{
+		buyerUserID: buyerUserID, ticker: ticker, quantity: quantity,
+		txRouting: txIDRouting, txLocal: txIDLocal, strike: strike,
+	})
+	return nil
 }
 
 func (f *fakeTradingReserver) CommitStock(_ context.Context, reservationID string) error {
@@ -202,6 +267,12 @@ type fakeNegForExec struct {
 	IsOngoing  bool
 	Amount     int
 	Settlement string // RFC3339
+
+	// Backing option-contract lifecycle (for the EXERCISE-time validator path):
+	// a closed negotiation (IsOngoing=false) is still exercisable while its contract
+	// is ACTIVE and ContractSettlement is in the future.
+	ContractStatus     string
+	ContractSettlement time.Time
 }
 
 func (f *fakeNegotiationLookup) FindNegotiation(ctx context.Context, id protocol.ForeignBankId) (*NegotiationLite, error) {
@@ -209,7 +280,12 @@ func (f *fakeNegotiationLookup) FindNegotiation(ctx context.Context, id protocol
 	if !ok {
 		return nil, errors.New("not found")
 	}
-	return &NegotiationLite{IsOngoing: n.IsOngoing, Amount: n.Amount}, nil
+	return &NegotiationLite{
+		IsOngoing:          n.IsOngoing,
+		Amount:             n.Amount,
+		ContractStatus:     n.ContractStatus,
+		ContractSettlement: n.ContractSettlement,
+	}, nil
 }
 
 func (f *fakeNegotiationLookup) FindSellerID(ctx context.Context, negID string) (string, error) {
@@ -274,6 +350,146 @@ func TestPrepareLocal_HappyPath_YesVote(t *testing.T) {
 	// But the tx should be persisted.
 	if len(s.txns) != 1 {
 		t.Errorf("expected 1 persisted tx, got %d", len(s.txns))
+	}
+}
+
+// BUG #1 fix: an incoming MONAS credit to one of our accounts must be recorded as a
+// MONAS_CREDIT ref at prepare (no reservation) and applied to the recipient on commit.
+// Before the fix, positive postings were skipped entirely and the recipient was never
+// credited (cross-bank money silently vanished).
+func TestPrepareLocal_IncomingMonasCredit_AppliedOnCommit(t *testing.T) {
+	bc := newFakeBC(map[string]*AccountInfo{
+		// 19-digit Banka 1 client account — must be recognised as ours (regression
+		// for the accountIsOurs len==18 bug that hid 19-digit client accounts).
+		"1110001100000000111": {OwnerID: 7, Currency: "USD", AvailableBalance: decimal.NewFromInt(1000)},
+	})
+	s := &fakeExecStore{}
+	e := newTestExecutor(111, s, bc, nil)
+
+	txID := protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-credit"}
+	tx := protocol.InterbankTransactionPayload{
+		TransactionId: txID,
+		Postings:      balancedMonasPosting("222000000000000099", "1110001100000000111", 5000, "USD"),
+	}
+
+	vote, err := e.PrepareLocal(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if vote.Vote != protocol.VoteYes {
+		t.Fatalf("expected YES, got %q reasons=%v", vote.Vote, vote.Reasons)
+	}
+
+	// A MONAS_CREDIT ref is recorded; incoming money is NOT reserved nor credited yet.
+	row, _ := s.FindTx(context.Background(), 222, "tx-credit")
+	if row == nil {
+		t.Fatal("expected persisted tx")
+	}
+	if len(row.ReservationRefs) != 1 || row.ReservationRefs[0].Kind != store.RefKindMonasCredit {
+		t.Fatalf("expected one MONAS_CREDIT ref, got %+v", row.ReservationRefs)
+	}
+	if len(bc.reserved) != 0 {
+		t.Fatalf("incoming credit must not reserve, got %v", bc.reserved)
+	}
+	if len(bc.credited) != 0 {
+		t.Fatalf("credit must be applied on commit, not prepare; got %v", bc.credited)
+	}
+
+	// Commit applies the credit to the recipient with the resolved owner as clientID.
+	if err := e.CommitLocal(context.Background(), txID); err != nil {
+		t.Fatalf("CommitLocal: %v", err)
+	}
+	if len(bc.credited) != 1 {
+		t.Fatalf("expected exactly one credit on commit, got %v", bc.credited)
+	}
+	if got := bc.credited[0]; got.account != "1110001100000000111" || got.amount != "5000" || got.clientID != 7 {
+		t.Fatalf("unexpected credit %+v", got)
+	}
+}
+
+// FIX 1 (asset-conservation): the buyer-side STOCK leg of a cross-bank OTC option
+// exercise (a positive PERSON+STOCK posting on our routing) must be recorded as a
+// STOCK_CREDIT ref at prepare and delivered to the buyer's portfolio on commit via
+// trading-service. Before the fix this leg was silently dropped (creditMonasPosting
+// returned ok=false for non-MONAS) — the strike cash was debited but the shares never
+// arrived. The strike is derived from the matching negative MONAS leg (|total| ÷ qty).
+func TestPrepareLocal_IncomingStockCredit_DeliveredOnCommit(t *testing.T) {
+	// Our buyer's USD account funds the strike debit (leg a).
+	bc := newFakeBC(map[string]*AccountInfo{
+		"111000000000000050": {OwnerID: 9, Currency: "USD", AvailableBalance: decimal.NewFromInt(100000)},
+	})
+	bc.byOwnerCurrency = map[string]string{formatOwnerKey(9, "USD"): "111000000000000050"}
+	s := &fakeExecStore{}
+	td := &fakeTradingReserver{}
+	e := newTestExecutor(111, s, bc, td)
+
+	txID := protocol.ForeignBankId{RoutingNumber: 111, Id: "tx-exercise"}
+	buyer := protocol.ForeignBankId{RoutingNumber: 111, Id: "C-9"}
+	seller := protocol.ForeignBankId{RoutingNumber: 222, Id: "C-3"}
+	// 4 shares, strike 250/unit → total strike 1000.
+	tx := protocol.InterbankTransactionPayload{
+		TransactionId: txID,
+		Postings: []protocol.Posting{
+			// a) buyer strike debit (our side, reserved).
+			{Account: &protocol.PersonAccount{Id: buyer}, Amount: decimal.NewFromInt(-1000), Asset: &protocol.MonasAsset{Currency: "USD"}},
+			// b) seller strike credit (partner side).
+			{Account: &protocol.PersonAccount{Id: seller}, Amount: decimal.NewFromInt(1000), Asset: &protocol.MonasAsset{Currency: "USD"}},
+			// c) seller stock debit (partner side).
+			{Account: &protocol.PersonAccount{Id: seller}, Amount: decimal.NewFromInt(-4), Asset: &protocol.StockAsset{Ticker: "AAPL"}},
+			// d) buyer stock credit (our side — must be delivered).
+			{Account: &protocol.PersonAccount{Id: buyer}, Amount: decimal.NewFromInt(4), Asset: &protocol.StockAsset{Ticker: "AAPL"}},
+		},
+	}
+
+	vote, err := e.PrepareLocal(context.Background(), tx)
+	if err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if vote.Vote != protocol.VoteYes {
+		t.Fatalf("expected YES, got %q reasons=%v", vote.Vote, vote.Reasons)
+	}
+
+	// Prepare must record a STOCK_CREDIT ref (plus the MONAS reservation for leg a) and
+	// NOT credit any stock yet (delivery happens on commit).
+	row, _ := s.FindTx(context.Background(), 111, "tx-exercise")
+	if row == nil {
+		t.Fatal("expected persisted tx")
+	}
+	var stockCreditRefs int
+	for _, r := range row.ReservationRefs {
+		if r.Kind == store.RefKindStockCredit {
+			stockCreditRefs++
+			if r.StockCreditBuyerID != 9 || r.StockCreditTicker != "AAPL" || r.StockCreditQuantity != 4 {
+				t.Errorf("unexpected stock-credit ref: %+v", r)
+			}
+			if r.StockCreditStrike != "250" {
+				t.Errorf("expected per-unit strike 250, got %q", r.StockCreditStrike)
+			}
+		}
+	}
+	if stockCreditRefs != 1 {
+		t.Fatalf("expected exactly one STOCK_CREDIT ref, got %d in %+v", stockCreditRefs, row.ReservationRefs)
+	}
+	if len(td.stockCredits) != 0 {
+		t.Fatalf("stock must be delivered on commit, not prepare; got %v", td.stockCredits)
+	}
+
+	// Commit delivers the shares to the buyer with the derived strike fallback.
+	if err := e.CommitLocal(context.Background(), txID); err != nil {
+		t.Fatalf("CommitLocal: %v", err)
+	}
+	if len(td.stockCredits) != 1 {
+		t.Fatalf("expected exactly one CreditStock on commit, got %v", td.stockCredits)
+	}
+	got := td.stockCredits[0]
+	if got.buyerUserID != 9 || got.ticker != "AAPL" || got.quantity != 4 {
+		t.Fatalf("unexpected CreditStock call: %+v", got)
+	}
+	if !got.strike.Equal(decimal.NewFromInt(250)) {
+		t.Fatalf("expected strike 250, got %s", got.strike)
+	}
+	if got.txRouting != 111 || got.txLocal != "tx-exercise" {
+		t.Fatalf("unexpected tx ids in CreditStock: %+v", got)
 	}
 }
 
@@ -687,5 +903,182 @@ func TestRollbackLocal_NotFound_NoOp(t *testing.T) {
 	err := e.RollbackLocal(context.Background(), protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-missing-rb"})
 	if err != nil {
 		t.Errorf("expected nil for missing tx during rollback, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-bank EXERCISE — B1 is SELLER, B2 is BUYER (the reported bug)
+// ---------------------------------------------------------------------------
+
+// sellerExerciseTx builds the exact §2.7.2 exercise transaction that B2 (buyer-bank, 222)
+// sends to B1 (seller-bank, 111) for an accepted cross-bank option. 1 share AAPL, strike
+// 200, USD. Sign convention matches B2's InterbankOtcWrapperService.exerciseContract:
+//
+//	p1  OPTION{111,neg}  +200 MONAS  — option pseudo-account receives strike
+//	p2  PERSON{111,C-5}  -200 MONAS  — seller (ours) receives strike cash
+//	p3  OPTION{111,neg}  -1   STOCK  — option pseudo-account delivers the share
+//	p4  PERSON{222,C-8}  +1   STOCK  — buyer (partner) receives the share
+func sellerExerciseTx(txID protocol.ForeignBankId, negID string) protocol.InterbankTransactionPayload {
+	neg := protocol.ForeignBankId{RoutingNumber: 111, Id: negID}
+	seller := protocol.ForeignBankId{RoutingNumber: 111, Id: "C-5"}
+	buyer := protocol.ForeignBankId{RoutingNumber: 222, Id: "C-8"}
+	usd := func() protocol.Asset { return &protocol.MonasAsset{Currency: "USD"} }
+	aapl := func() protocol.Asset { return &protocol.StockAsset{Ticker: "AAPL"} }
+	return protocol.InterbankTransactionPayload{
+		TransactionId: txID,
+		Postings: []protocol.Posting{
+			{Account: &protocol.OptionPseudoAccount{Id: neg}, Amount: decimal.NewFromInt(200), Asset: usd()},
+			{Account: &protocol.PersonAccount{Id: seller}, Amount: decimal.NewFromInt(-200), Asset: usd()},
+			{Account: &protocol.OptionPseudoAccount{Id: neg}, Amount: decimal.NewFromInt(-1), Asset: aapl()},
+			{Account: &protocol.PersonAccount{Id: buyer}, Amount: decimal.NewFromInt(1), Asset: aapl()},
+		},
+		Message: "OTC exercise option",
+	}
+}
+
+// newSellerExerciseExecutor wires an executor for B1-as-seller with a CLOSED negotiation
+// (accept set is_ongoing=false) whose contract is still ACTIVE and settlement is in the
+// future — the exact live state at exercise time.
+func newSellerExerciseExecutor(t *testing.T, negID string) (*Executor, *fakeExecStore, *fakeBankingCoreReserver, *fakeTradingReserver) {
+	t.Helper()
+	// Seller's USD account, resolvable by owner (C-5 → ownerID 5).
+	bc := newFakeBC(map[string]*AccountInfo{
+		"111000000000000005": {OwnerID: 5, Currency: "USD", AvailableBalance: decimal.NewFromInt(10)},
+	})
+	bc.byOwnerCurrency = map[string]string{formatOwnerKey(5, "USD"): "111000000000000005"}
+	s := &fakeExecStore{}
+	td := &fakeTradingReserver{}
+	negs := &fakeNegotiationLookup{negs: map[string]*fakeNegForExec{
+		negID: {
+			SellerID:           "C-5",
+			IsOngoing:          false, // accepted → closed
+			Amount:             1,
+			ContractStatus:     ContractStatusActive,
+			ContractSettlement: time.Now().Add(7 * 24 * time.Hour),
+		},
+	}}
+	return newExecutorWithNegs(111, s, bc, td, negs), s, bc, td
+}
+
+// The headline reproduction: B1 (seller) must VOTE YES for the exercise of an accepted,
+// still-ACTIVE option whose negotiation is closed. Pre-fix this voted NO with
+// OPTION_USED_OR_EXPIRED, aborting the 2PC so no accepted cross-bank option could be used.
+func TestPrepareLocal_SellerExercise_ClosedNegotiation_ActiveContract_YesVote(t *testing.T) {
+	negID := "neg-9f1830ac93f58786"
+	e, s, _, _ := newSellerExerciseExecutor(t, negID)
+	txID := protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-ex-seller"}
+
+	vote, err := e.PrepareLocal(context.Background(), sellerExerciseTx(txID, negID))
+	if err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if vote.Vote != protocol.VoteYes {
+		t.Fatalf("expected YES for exercisable closed-negotiation, got %q reasons=%v", vote.Vote, vote.Reasons)
+	}
+	// One OPTION_EXERCISE ref (seller stock delivery) + one MONAS_CREDIT ref (seller cash).
+	row, _ := s.FindTx(context.Background(), 222, "tx-ex-seller")
+	if row == nil {
+		t.Fatal("expected persisted tx")
+	}
+	var exerciseRefs, creditRefs int
+	for _, r := range row.ReservationRefs {
+		switch r.Kind {
+		case store.RefKindOptionExercise:
+			exerciseRefs++
+			if r.NegotiationID == nil || *r.NegotiationID != negID {
+				t.Errorf("OPTION_EXERCISE ref negID mismatch: %+v", r)
+			}
+		case store.RefKindMonasCredit:
+			creditRefs++
+		}
+	}
+	if exerciseRefs != 1 {
+		t.Fatalf("expected exactly one OPTION_EXERCISE ref, got %d in %+v", exerciseRefs, row.ReservationRefs)
+	}
+	if creditRefs != 1 {
+		t.Fatalf("expected exactly one MONAS_CREDIT ref (seller cash), got %d in %+v", creditRefs, row.ReservationRefs)
+	}
+}
+
+// Conservation on commit: seller's reserved share is DELIVERED (ExerciseOption) AND the
+// seller is CREDITED the strike exactly once. No double-settle, no value created/destroyed.
+func TestCommitLocal_SellerExercise_DeliversStock_CreditsStrike(t *testing.T) {
+	negID := "neg-9f1830ac93f58786"
+	e, _, bc, td := newSellerExerciseExecutor(t, negID)
+	txID := protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-ex-commit"}
+
+	if _, err := e.PrepareLocal(context.Background(), sellerExerciseTx(txID, negID)); err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	// Nothing delivered/credited at prepare.
+	if len(td.committed) != 0 {
+		t.Fatalf("no stock delivery at prepare, got %v", td.committed)
+	}
+	if len(bc.credited) != 0 {
+		t.Fatalf("no strike credit at prepare, got %v", bc.credited)
+	}
+
+	if err := e.CommitLocal(context.Background(), txID); err != nil {
+		t.Fatalf("CommitLocal: %v", err)
+	}
+
+	// (1) Seller's reserved share delivered via ExerciseOption (exactly once).
+	wantExercise := "option-exercise-" + negID
+	gotExercise := 0
+	for _, c := range td.committed {
+		if c == wantExercise {
+			gotExercise++
+		}
+	}
+	if gotExercise != 1 {
+		t.Fatalf("expected exactly one ExerciseOption(%s) on commit, got %v", negID, td.committed)
+	}
+	// (2) Seller credited the strike exactly once, to their USD account.
+	if len(bc.credited) != 1 {
+		t.Fatalf("expected exactly one strike credit to seller, got %v", bc.credited)
+	}
+	if got := bc.credited[0]; got.account != "111000000000000005" || got.amount != "200" || got.clientID != 5 {
+		t.Fatalf("unexpected seller strike credit: %+v", got)
+	}
+	// (3) No raw stock reservation/commit was made (delivery is via the option lifecycle).
+	if len(td.reserved) != 0 {
+		t.Fatalf("exercise must not raw-reserve stock on the seller side, got %v", td.reserved)
+	}
+
+	// Idempotent re-commit (duplicate COMMIT_TX §2.9) — no double delivery / double credit.
+	if err := e.CommitLocal(context.Background(), txID); err != nil {
+		t.Fatalf("idempotent re-CommitLocal: %v", err)
+	}
+	if len(bc.credited) != 1 {
+		t.Fatalf("re-commit must not double-credit, got %v", bc.credited)
+	}
+}
+
+// On a 2PC ROLLBACK of the exercise, the seller's accept-time stock reservation must be
+// LEFT INTACT (a later retry needs it) — ReleaseOption must NOT be called. The seller cash
+// credit is likewise un-applied (nothing was credited at prepare).
+func TestRollbackLocal_SellerExercise_PreservesReservation(t *testing.T) {
+	negID := "neg-9f1830ac93f58786"
+	e, s, bc, td := newSellerExerciseExecutor(t, negID)
+	txID := protocol.ForeignBankId{RoutingNumber: 222, Id: "tx-ex-rollback"}
+
+	if _, err := e.PrepareLocal(context.Background(), sellerExerciseTx(txID, negID)); err != nil {
+		t.Fatalf("PrepareLocal: %v", err)
+	}
+	if err := e.RollbackLocal(context.Background(), txID); err != nil {
+		t.Fatalf("RollbackLocal: %v", err)
+	}
+	if len(td.released) != 0 {
+		t.Fatalf("exercise rollback must NOT release the seller's reservation, got %v", td.released)
+	}
+	if len(td.committed) != 0 {
+		t.Fatalf("rollback must not deliver stock, got %v", td.committed)
+	}
+	if len(bc.credited) != 0 {
+		t.Fatalf("rollback must not credit the seller, got %v", bc.credited)
+	}
+	row, _ := s.FindTx(context.Background(), 222, "tx-ex-rollback")
+	if row == nil || row.Status != store.TxStatusRolledBack {
+		t.Fatalf("expected ROLLED_BACK status, got %+v", row)
 	}
 }

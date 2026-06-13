@@ -231,6 +231,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.accountByOwner(w, r)
 	case r.Method == http.MethodGet && path == "/internal/interbank/account-resolve":
 		h.resolveInterbankAccount(w, r)
+	case r.Method == http.MethodPost && path == "/internal/interbank/record-payment":
+		h.recordInterbankPayment(w, r)
 
 	case r.Method == http.MethodPost && path == "/internal/accounts/transaction":
 		h.internalTransaction(w, r, false)
@@ -518,6 +520,17 @@ func (h *Handler) resolveInterbankAccount(w http.ResponseWriter, r *http.Request
 	respond(w, resp, http.StatusOK, err)
 }
 
+func (h *Handler) recordInterbankPayment(w http.ResponseWriter, r *http.Request) {
+	if !h.requireServiceRole(w, r) {
+		return
+	}
+	var req service.RecordInterbankPaymentRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	respondEmptyOK(w, h.services.Interbank.RecordInterbankPayment(r.Context(), req))
+}
+
 type creditDebitRequest struct {
 	AccountNumber string `json:"accountNumber"`
 	Amount        any    `json:"amount"`
@@ -691,6 +704,7 @@ func isKnownPath(path string) bool {
 		"/transactions/stockBuyMarginTransaction", "/transactions/stockSellMarginTransaction",
 		"/transactions/internal/reserve-funds", "/transactions/internal/transfer",
 		"/internal/interbank/reserve-monas", "/internal/interbank/account-by-owner", "/internal/interbank/account-resolve",
+		"/internal/interbank/record-payment",
 		"/internal/accounts/transaction", "/internal/accounts/exchange/buy", "/internal/accounts/exchange/sell",
 		"/internal/accounts/transactionFromBank", "/internal/accounts/debit", "/internal/accounts/credit",
 		"/internal/accounts/creditBank", "/internal/accounts/debitBank",

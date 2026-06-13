@@ -4,7 +4,7 @@ apiVersion: sparkoperator.k8s.io/v1beta2
 kind: ScheduledSparkApplication
 metadata:
   name: banka-analytics-spark
-  namespace: default
+  namespace: banka-1
 spec:
   schedule: "0 * * * *"
   concurrencyPolicy: Forbid

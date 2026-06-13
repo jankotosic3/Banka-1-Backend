@@ -171,10 +171,18 @@ func (s *NegotiationStore) MarkClosed(ctx context.Context, id string) error {
 	return err
 }
 
-// ListForUser returns all negotiations where the given user is buyer or seller
+// ListForUser returns negotiations where the given user is buyer or seller
 // (matching by foreign-id string, e.g. "C-15").
-// When includeAll is true (admin/supervisor scope), userForeignID is ignored and
-// all rows are returned ordered by last_modified_at DESC.
+//
+// When includeAll is true (admin/supervisor scope), userForeignID is ignored and ALL
+// rows — open and closed — are returned for oversight/history, ordered by
+// last_modified_at DESC.
+//
+// For a non-admin user the feed is the ACTIVE list only: closed negotiations
+// (is_ongoing = false) are filtered out (FIX 4). Previously closed mirrors lingered in
+// the user's active list because the FE maps is_ongoing=false → 'ACCEPTED' and could
+// not tell a partner-rejected/closed mirror from a settled one, so a stale "open"
+// negotiation kept showing an actionable Accept button.
 func (s *NegotiationStore) ListForUser(ctx context.Context, userForeignID string, includeAll bool) ([]*Negotiation, error) {
 	var rows interface {
 		Next() bool
@@ -190,7 +198,7 @@ func (s *NegotiationStore) ListForUser(ctx context.Context, userForeignID string
 	} else {
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+negotiationSelectCols+` FROM interbank_negotiations
-			 WHERE buyer_id = $1 OR seller_id = $1
+			 WHERE (buyer_id = $1 OR seller_id = $1) AND is_ongoing = true
 			 ORDER BY last_modified_at DESC`,
 			userForeignID)
 	}

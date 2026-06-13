@@ -1,38 +1,32 @@
-# Prometheus alerting rules za Banka-1 backend (black-box monitoring).
-#
-# Svi servisi su Go i ne emituju aplikacione metrike; zato se mere SPOLJA:
-#   - blackbox-exporter  -> probe_success / probe_duration_seconds (po servisu)
-#   - postgres-exporter  -> pg_stat_database_numbackends
-#   - rabbitmq-exporter  -> rabbitmq_queue_messages_ready, rabbitmq_queue_consumers
+# DEMO MODE pravila - kratki for i spusteni pragovi da warning alarmi okidaju brzo.
+# NE koristiti u produkciji. Aktivacija: ./setup/demo-mode.ps1 on   (vrati: ./setup/demo-mode.ps1 off)
 groups:
   - name: infrastructure
-    interval: 30s
+    interval: 15s
     rules:
       - alert: OtelCollectorDown
         expr: up{job="otel-collector"} == 0
-        for: 1m
+        for: 15s
         labels:
           severity: critical
           component: infrastructure
         annotations:
           summary: "OTel Collector is down"
-          description: "Prometheus ne moze da skrejpuje OTel collector - trace pipeline je blokiran."
+          description: "Prometheus ne moze da skrejpuje OTel collector — trace pipeline je blokiran."
 
       - alert: AlertmanagerDown
         expr: up{job="alertmanager"} == 0
-        for: 1m
+        for: 15s
         labels:
           severity: critical
           component: infrastructure
         annotations:
           summary: "Alertmanager is down"
-          description: "Prometheus ne moze da skrejpuje Alertmanager - alarmi se mozda ne isporucuju."
+          description: "Prometheus ne moze da skrejpuje Alertmanager — alarmi se mozda ne isporucuju."
 
   - name: service-availability
     interval: 10s
     rules:
-      # Jedno pravilo pokriva svih 8 servisa; service_name dolazi sa probe metrike.
-      # for: 15s = brza detekcija (~30s do DM). Za stroziju produkciju vrati na ~1m (manje flapping-a).
       - alert: ServiceDown
         expr: probe_success == 0
         for: 15s
@@ -43,54 +37,56 @@ groups:
           description: "Health proba ka {{ $labels.instance }} ne uspeva. Servis je verovatno pao ili ne odgovara."
 
   - name: http-health
-    interval: 30s
+    interval: 15s
     rules:
+      # DEMO: prag 0.5s (umesto 1.5s) — toxiproxy +1500ms lako pređe. for: 20s.
       - alert: ServiceProbeSlow
-        expr: probe_duration_seconds > 1.5
-        for: 3m
+        expr: probe_duration_seconds > 0.5
+        for: 20s
         labels:
           severity: warning
           category: http
         annotations:
           summary: "Spor health odgovor na {{ $labels.service_name }}"
-          description: "Health proba ka {{ $labels.instance }} traje {{ $value }}s (>1.5s) 3+ minuta."
+          description: "Health proba ka {{ $labels.instance }} traje {{ $value }}s (>0.5s demo prag)."
 
   - name: database
-    interval: 30s
+    interval: 15s
     rules:
-      # max_connections=200 je fiksiran u docker-compose.yml (postgres command).
+      # DEMO: prag >30 konekcija (0.15*200) umesto >160. for: 15s.
       - alert: PostgresConnectionsHigh
-        expr: sum(pg_stat_database_numbackends) / 200 > 0.8
-        for: 2m
+        expr: sum(pg_stat_database_numbackends) / 200 > 0.15
+        for: 15s
         labels:
           severity: warning
           service: postgres
           category: database
         annotations:
-          summary: "Postgres konekcije pri vrhu"
-          description: "Aktivnih backend-ova je >80% od max_connections (200) 2+ minuta. Nove DB konekcije ce cekati/timeout-ovati."
+          summary: "Postgres konekcije pri vrhu (demo)"
+          description: "Aktivnih backend-ova je preko demo praga (>30 od 200)."
 
   - name: messaging
-    interval: 30s
+    interval: 15s
     rules:
+      # DEMO: prag >10 poruka umesto >1000. for: 20s.
       - alert: RabbitMQBacklog
-        expr: rabbitmq_queue_messages_ready > 1000
-        for: 5m
+        expr: rabbitmq_queue_messages_ready > 10
+        for: 20s
         labels:
           severity: warning
           service: rabbitmq
           category: messaging
         annotations:
-          summary: "RabbitMQ zaostatak u redu {{ $labels.queue }}"
-          description: "{{ $value }} neobradjenih poruka u redu {{ $labels.queue }} 5+ minuta - consumer ne stize ili je pao."
+          summary: "RabbitMQ zaostatak u redu {{ $labels.queue }} (demo)"
+          description: "{{ $value }} neobradjenih poruka u redu {{ $labels.queue }} (>10 demo prag)."
 
       - alert: RabbitMQNoConsumers
         expr: rabbitmq_queue_consumers == 0 and rabbitmq_queue_messages_ready > 0
-        for: 5m
+        for: 20s
         labels:
           severity: warning
           service: rabbitmq
           category: messaging
         annotations:
           summary: "Nema consumer-a na redu {{ $labels.queue }}"
-          description: "Red {{ $labels.queue }} ima poruke ali 0 consumer-a 5+ minuta."
+          description: "Red {{ $labels.queue }} ima poruke ali 0 consumer-a."

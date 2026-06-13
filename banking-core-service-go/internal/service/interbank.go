@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"banka1/banking-core-service-go/internal/decimal"
 	"banka1/banking-core-service-go/internal/uuid"
@@ -14,6 +15,24 @@ const (
 	InterbankCommitted = "COMMITTED"
 	InterbankReleased  = "RELEASED"
 )
+
+// interbankExternalSender is the sentinel stored in payment_table.from_account_number
+// when a cross-bank credit arrives from a foreign Person-only counterparty that has no
+// real 18-digit account number on the wire (e.g. an inbound OTC premium). The column is
+// VARCHAR(255) NOT NULL, so an empty fromAccount cannot be persisted as NULL/blank — the
+// sentinel keeps the audit row insertable while clearly marking the foreign origin.
+const interbankExternalSender = "INTERBANK-EXTERNAL"
+
+// normalizeInterbankFromAccount returns the account string to persist as the sender of a
+// recorded inter-bank payment. A blank fromAccount (foreign Person-only sender) collapses
+// to the interbankExternalSender sentinel; any non-blank value is passed through trimmed.
+func normalizeInterbankFromAccount(fromAccount string) string {
+	trimmed := strings.TrimSpace(fromAccount)
+	if trimmed == "" {
+		return interbankExternalSender
+	}
+	return trimmed
+}
 
 type InterbankService struct {
 	db       *sql.DB
@@ -43,8 +62,87 @@ type AccountByOwnerResponse struct {
 	AccountNumber string `json:"accountNumber"`
 }
 
+// RecordInterbankPaymentRequest is the body for POST /internal/interbank/record-payment.
+// It is posted by interbank-service after a cross-bank 2PC money leg commits, so the
+// movement shows up in this bank's transaction history (payment_table). The counterparty
+// account may be foreign (belonging to another bank); in that case its client id is left
+// as 0 because we have no local owner for it.
+type RecordInterbankPaymentRequest struct {
+	OrderNumber    string          `json:"orderNumber"`    // idempotency key (UNIQUE on payment_table.order_number)
+	FromAccount    string          `json:"fromAccount"`    // sender 18-digit account (local on outbound, foreign on inbound)
+	ToAccount      string          `json:"toAccount"`      // recipient 18-digit account (foreign on outbound, local on inbound)
+	Amount         decimal.Decimal `json:"amount"`         // moved amount (initial = final, same-currency interbank)
+	Currency       string          `json:"currency"`       // ISO currency code (from = to)
+	RecipientName  string          `json:"recipientName"`  // optional display name
+	PaymentPurpose string          `json:"paymentPurpose"` // optional purpose text
+}
+
 func NewInterbankService(db *sql.DB, accounts *AccountService) *InterbankService {
 	return &InterbankService{db: db, accounts: accounts}
+}
+
+// RecordInterbankPayment inserts a COMPLETED payment_table row for a cross-bank money
+// movement so it appears in transaction history. Idempotent on order_number
+// (ON CONFLICT DO NOTHING), matching the InternalService transfer audit style.
+//
+// sender_client_id / recipient_client_id are resolved from the local account when the
+// account belongs to this bank; the foreign counterparty has no local owner so its id
+// is left as 0 (the column is NOT NULL, so a sentinel 0 is used rather than NULL).
+func (s *InterbankService) RecordInterbankPayment(ctx context.Context, req RecordInterbankPaymentRequest) error {
+	// fromAccount is NO LONGER required: an inbound cross-bank credit from a foreign
+	// Person-only counterparty (e.g. an OTC premium) carries no real sender account on
+	// the wire, so it arrives blank. Collapsing it to a sentinel keeps the audit row
+	// insertable (from_account_number is VARCHAR(255) NOT NULL) instead of 400-ing and
+	// dropping the received money out of transaction history. orderNumber/toAccount stay
+	// mandatory.
+	if req.OrderNumber == "" || req.ToAccount == "" {
+		return BadRequest("orderNumber i toAccount su obavezni")
+	}
+	if req.Amount.Sign() <= 0 {
+		return BadRequest("Amount must be positive")
+	}
+	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
+	if currency == "" {
+		return BadRequest("currency je obavezan")
+	}
+
+	fromAccount := normalizeInterbankFromAccount(req.FromAccount)
+	senderClientID := s.resolveLocalOwner(ctx, fromAccount)
+	recipientClientID := s.resolveLocalOwner(ctx, req.ToAccount)
+
+	recipientName := strings.TrimSpace(req.RecipientName)
+	if recipientName == "" {
+		recipientName = "Account " + req.ToAccount
+	}
+	purpose := strings.TrimSpace(req.PaymentPurpose)
+	if purpose == "" {
+		purpose = "Interbank payment"
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO payment_table (
+    from_account_number, to_account_number, initial_amount, final_amount, commission,
+    sender_client_id, recipient_client_id, recipient_name,
+    payment_code, reference_number, payment_purpose, status,
+    from_currency, to_currency, exchange_rate, order_number, created_at, updated_at, version
+) VALUES ($1, $2, $3, $3, 0, $4, $5, $6, '289', NULL, $7, 'COMPLETED',
+          $8, $8, 1, $9, NOW(), NOW(), 0)
+ON CONFLICT (order_number) DO NOTHING
+`, fromAccount, req.ToAccount, req.Amount,
+		senderClientID, recipientClientID, recipientName,
+		purpose, currency, req.OrderNumber)
+	return err
+}
+
+// resolveLocalOwner returns the owner (vlasnik) id of a local account, or 0 when the
+// account is not found locally (e.g. it belongs to a foreign bank). Best-effort:
+// resolution failures degrade to 0 rather than failing the audit record.
+func (s *InterbankService) resolveLocalOwner(ctx context.Context, accountNumber string) int64 {
+	acc, err := s.accounts.getByNumber(ctx, s.db, accountNumber, false)
+	if err != nil {
+		return 0
+	}
+	return acc.OwnerID
 }
 
 func (s *InterbankService) ReserveMonas(ctx context.Context, req ReserveMonasRequest) (string, error) {

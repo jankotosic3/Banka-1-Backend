@@ -1,0 +1,14 @@
+[
+  {
+    "name": "banking-core",
+    "listen": "0.0.0.0:18084",
+    "upstream": "banking-core-service:8084",
+    "enabled": true
+  },
+  {
+    "name": "trading-service",
+    "listen": "0.0.0.0:18088",
+    "upstream": "trading-service:8088",
+    "enabled": true
+  }
+]

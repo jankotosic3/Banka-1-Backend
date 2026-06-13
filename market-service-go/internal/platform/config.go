@@ -40,6 +40,11 @@ type StockConfig struct {
 	MarketDataAPIKey       string
 	AlphaVantageAPIKey     string
 	ExchangeServiceBaseURL string
+	InfluxEnabled          bool
+	InfluxURL              string
+	InfluxOrg              string
+	InfluxBucket           string
+	InfluxToken            string
 	RedisHost              string
 	RedisPort              string
 	RedisTimeout           time.Duration
@@ -85,6 +90,11 @@ func LoadConfig() Config {
 			MarketDataAPIKey:       getEnv("STOCK_MARKET_DATA_API_KEY", getEnv("ALPHA_VANTAGE_API_KEY", "")),
 			AlphaVantageAPIKey:     getEnv("ALPHA_VANTAGE_API_KEY", ""),
 			ExchangeServiceBaseURL: getEnv("STOCK_EXCHANGE_SERVICE_URL", "http://localhost:8085"),
+			InfluxEnabled:          getEnvBool("STOCK_INFLUX_ENABLED", false),
+			InfluxURL:              getEnv("STOCK_INFLUX_URL", "http://localhost:8086"),
+			InfluxOrg:              getEnv("STOCK_INFLUX_ORG", "banka1"),
+			InfluxBucket:           getEnv("STOCK_INFLUX_BUCKET", "market_data"),
+			InfluxToken:            getEnv("STOCK_INFLUX_TOKEN", ""),
 			RedisHost:              getEnv("REDIS_HOST", ""),
 			RedisPort:              getEnv("REDIS_PORT", "6379"),
 			RedisTimeout:           time.Duration(getEnvInt("REDIS_TIMEOUT_MS", 2000)) * time.Millisecond,

@@ -17,6 +17,8 @@ type ServerDeps struct {
 	PublicStock     *PublicStockHandler
 	UserDisplay     *UserDisplayHandler
 	OtcOutbound     *OtcOutboundHandler
+	OtcContracts    *OtcContractsHandler
+	Payments        *PaymentHandler
 	JWTSecret       string
 }
 
@@ -96,7 +98,23 @@ func NewRouter(d ServerDeps) http.Handler {
 				r.Post("/negotiations/{id}/accept", d.OtcOutbound.Accept)
 				r.Delete("/negotiations/{id}", d.OtcOutbound.Delete)
 				r.Get("/public-stock", d.OtcOutbound.PartnerPublicStock)
+
+				// Buyer-side option contracts (cross-bank OTC option buy lifecycle).
+				if d.OtcContracts != nil {
+					r.Get("/contracts/my", d.OtcContracts.List)
+					r.Post("/contracts/{id}/exercise", d.OtcContracts.Exercise)
+				}
 			})
+		})
+	}
+
+	// FE-facing JWT-authenticated outbound cross-bank payment route.
+	// Same permissions as the OTC outbound routes.
+	if d.Payments != nil {
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireJWT(d.JWTSecret))
+			r.Use(auth.RequirePermission("OTC_TRADE", "CLIENT_OTC_TRADE", "ROLE_ADMIN", "ROLE_SUPERVISOR"))
+			r.Post("/api/interbank/payments", d.Payments.Send)
 		})
 	}
 
@@ -143,7 +161,21 @@ func NewRouterWithMock(d ServerDeps, mountMock func(chi.Router)) http.Handler {
 				r.Post("/negotiations/{id}/accept", d.OtcOutbound.Accept)
 				r.Delete("/negotiations/{id}", d.OtcOutbound.Delete)
 				r.Get("/public-stock", d.OtcOutbound.PartnerPublicStock)
+
+				// Buyer-side option contracts (cross-bank OTC option buy lifecycle).
+				if d.OtcContracts != nil {
+					r.Get("/contracts/my", d.OtcContracts.List)
+					r.Post("/contracts/{id}/exercise", d.OtcContracts.Exercise)
+				}
 			})
+		})
+	}
+
+	if d.Payments != nil {
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireJWT(d.JWTSecret))
+			r.Use(auth.RequirePermission("OTC_TRADE", "CLIENT_OTC_TRADE", "ROLE_ADMIN", "ROLE_SUPERVISOR"))
+			r.Post("/api/interbank/payments", d.Payments.Send)
 		})
 	}
 
